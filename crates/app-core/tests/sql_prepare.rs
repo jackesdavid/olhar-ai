@@ -507,3 +507,224 @@ fn snippet(sql: &str) -> String {
         flat
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Card #160 Phase 4 — a statement that touches a tenant-scoped table must NAME the tenant.
+//
+// `every_sqlx_statement_prepares` above proves each statement is valid against the schema and that
+// its binds line up. Neither says anything about isolation: `SELECT * FROM devices` is, to that
+// check, a perfectly healthy query. It is also every tenant's cameras.
+//
+// Phase 3 of the plan carries the tenant to the database per connection, which is the real fix and
+// converts 330 call sites. This is the cheap half that lands first and covers everything Phase 3
+// has not reached: if a statement touches a table that has a `tenant_id` column, the statement must
+// mention `tenant_id` — or be listed in ALLOWED_CROSS_TENANT with a reason someone wrote down.
+//
+// WHAT THIS DOES NOT DO. It checks that the column is MENTIONED, not that it is used as a
+// predicate: a query naming `tenant_id` only in its SELECT list passes. Tightening that means
+// parsing SQL properly, and a crude gate running today beats a correct one that never lands. The
+// failure it does catch — a tenant table queried with no notion of a tenant anywhere — is the one
+// that leaks data.
+
+/// The RATCHET, not an allow-list.
+///
+/// 60 statements touch a tenant-scoped table without naming `tenant_id`. Demanding zero today would
+/// mean writing 60 justifications in one sitting, which is rubber-stamping rather than review — and
+/// a file full of unread reasons is worse than an honest number.
+///
+/// So this records where the debt is, per file, and the test enforces two directions:
+///
+///   * a file may not EXCEED its number — a new unscoped statement fails CI;
+///   * a file may not fall BELOW it without the number being lowered — an improvement that is not
+///     recorded can silently be undone later.
+///
+/// Per FILE rather than per line, because line numbers churn on every edit and a baseline nobody
+/// can keep current gets deleted.
+///
+/// Most of these are not leaks. The dominant shape is `WHERE id = $1` — a row addressed by its own
+/// unguessable UUID, already resolved by a tenant-scoped query upstream. That is safe by
+/// unguessability, not safe by construction, and closing exactly that gap is what RLS (Phase 2) is
+/// for. A few are legitimately cross-tenant: the queue consumers, the master console's
+/// `COUNT(*) FROM telegram_config`, and invite acceptance by token (the person has no tenant yet).
+///
+/// The number goes DOWN as Phase 3 converts call sites. It should never go up.
+const TENANT_PREDICATE_BASELINE: &[(&str, usize)] = &[
+    ("crates/app-core/src/billing/invoices.rs", 1),
+    ("crates/app-core/src/billing/payments/mod.rs", 2),
+    ("crates/app-core/src/edge_commands.rs", 8),
+    ("crates/app-core/src/event_queue.rs", 3),
+    ("crates/app-core/src/invites.rs", 2),
+    ("crates/app-core/src/notification/queue.rs", 6),
+    ("crates/app-core/src/notification/repo.rs", 1),
+    ("crates/app-core/src/work_queue.rs", 10),
+    ("crates/app-core/src/workflows/device_gate.rs", 3),
+    ("crates/app-core/src/workflows/repo.rs", 2),
+    ("sentinel-control/src/box_signing.rs", 4),
+    ("sentinel-control/src/handlers.rs", 1),
+    ("sentinel-control/src/password_reset.rs", 3),
+    ("sentinel-control/src/store.rs", 14),
+];
+
+#[test]
+fn every_tenant_scoped_statement_names_the_tenant() {
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        eprintln!("tenant_predicate: SKIPPED — set TEST_DATABASE_URL to run it.");
+        return;
+    };
+
+    let root = repo_root();
+    let mut files = Vec::new();
+    for dir in SCAN_DIRS {
+        collect_rs(&root.join(dir), &mut files);
+    }
+    let mut sites = Vec::new();
+    let mut dynamic = Vec::new();
+    for path in &files {
+        let src = std::fs::read_to_string(path).expect("read source");
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        scan_file(&rel, &src, &mut sites, &mut dynamic);
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let tenant_tables = rt.block_on(async { tenant_scoped_tables(&url).await });
+    assert!(
+        tenant_tables.len() > 20,
+        "tenant_predicate: only {} tenant-scoped tables found — the schema query is wrong, not the \
+         codebase",
+        tenant_tables.len()
+    );
+
+    let mut findings: Vec<(String, String)> = Vec::new();
+    for site in &sites {
+        let touched = tables_touched(&site.sql);
+        let scoped: Vec<&String> = touched.iter().filter(|t| tenant_tables.contains(*t)).collect();
+        if scoped.is_empty() {
+            continue;
+        }
+        if site.sql.to_lowercase().contains("tenant_id") {
+            continue;
+        }
+        findings.push((
+            site.file.clone(),
+            format!(
+                "  {}:{} — touches {} without naming tenant_id\n      {}",
+                site.file,
+                site.line,
+                scoped
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                snippet(&site.sql)
+            ),
+        ));
+    }
+
+    let mut per_file: std::collections::BTreeMap<&str, (usize, Vec<&str>)> =
+        std::collections::BTreeMap::new();
+    for (file, detail) in &findings {
+        let e = per_file.entry(file.as_str()).or_insert((0, Vec::new()));
+        e.0 += 1;
+        e.1.push(detail.as_str());
+    }
+
+    eprintln!(
+        "tenant_predicate: {} statements scanned, {} tenant-scoped tables, {} finding(s) across {} \
+         file(s)",
+        sites.len(),
+        tenant_tables.len(),
+        findings.len(),
+        per_file.len()
+    );
+
+    let baseline: std::collections::BTreeMap<&str, usize> =
+        TENANT_PREDICATE_BASELINE.iter().copied().collect();
+
+    let mut regressions = Vec::new();
+    for (file, (count, details)) in &per_file {
+        let allowed = baseline.get(file).copied().unwrap_or(0);
+        if *count > allowed {
+            regressions.push(format!(
+                "{file}: {count} unscoped statement(s), baseline {allowed}\n{}",
+                details.join("\n")
+            ));
+        }
+    }
+    if !regressions.is_empty() {
+        panic!(
+            "tenant_predicate: a statement touching a tenant-scoped table does not name \
+             tenant_id.\n\nAdd the predicate. If the query is genuinely cross-tenant, raise the \
+             file's number in TENANT_PREDICATE_BASELINE and say why in the commit — the ratchet \
+             only means something if going up costs an explanation.\n\n{}",
+            regressions.join("\n\n")
+        );
+    }
+
+    // The other direction: an improvement that is not recorded can be silently undone later.
+    let mut improved = Vec::new();
+    for (file, allowed) in &baseline {
+        let now = per_file.get(file).map(|(c, _)| *c).unwrap_or(0);
+        if now < *allowed {
+            improved.push(format!("  {file}: {allowed} -> {now}"));
+        }
+    }
+    assert!(
+        improved.is_empty(),
+        "tenant_predicate: fewer unscoped statements than the baseline — good. Lower these numbers \
+         in TENANT_PREDICATE_BASELINE so the ratchet holds:\n{}",
+        improved.join("\n")
+    );
+}
+
+/// Every public table carrying a `tenant_id` column, asked of the live schema rather than listed
+/// here — a hand-maintained list would drift the first time someone adds a table.
+async fn tenant_scoped_tables(url: &str) -> std::collections::HashSet<String> {
+    use sqlx::{Connection, PgConnection, Row};
+    let mut conn = PgConnection::connect(url).await.expect("connect");
+    sqlx::migrate!("src/../migrations")
+        .run(&mut conn)
+        .await
+        .expect("migrate");
+    let rows = sqlx::query(
+        "SELECT table_name FROM information_schema.columns
+          WHERE table_schema = 'public' AND column_name = 'tenant_id'",
+    )
+    .fetch_all(&mut conn)
+    .await
+    .expect("query tenant-scoped tables");
+    rows.into_iter()
+        .map(|r| r.get::<String, _>("table_name"))
+        .collect()
+}
+
+/// Table names a statement references. Deliberately shallow: the identifier following FROM, JOIN,
+/// UPDATE, INTO. Subqueries and CTEs are covered because those keywords appear inside them too.
+fn tables_touched(sql: &str) -> Vec<String> {
+    const LEAD: &[&str] = &["from", "join", "update", "into"];
+    let lower = sql.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut out = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        if !LEAD.contains(w) {
+            continue;
+        }
+        if let Some(next) = words.get(i + 1) {
+            // `DELETE FROM only` / `INSERT INTO` guards, plus CTE self-references are harmless:
+            // a name that is not a real table simply never matches the tenant-table set.
+            if !next.is_empty() && !out.contains(&next.to_string()) {
+                out.push(next.to_string());
+            }
+        }
+    }
+    out
+}

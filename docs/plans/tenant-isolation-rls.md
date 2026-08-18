@@ -139,11 +139,35 @@ call sites onto it.
 recordings (video), then `events`, then the rest. Each table can be `FORCE`d the moment its readers
 are converted, so isolation lands incrementally and every step is independently verifiable.
 
-### Phase 4 — Make omission impossible to reintroduce
-Extend `sql_prepare` (which already parses every literal statement) to assert that any statement
-touching a tenant-scoped table either carries a `tenant_id` predicate or is explicitly allow-listed
-with a reason. That is the cheap compile-time-ish half of strategy B, and it covers the call sites
-Phase 3 has not converted yet.
+### Phase 4 — Make omission impossible to reintroduce — **BUILT 2026-08-18**
+
+`every_tenant_scoped_statement_names_the_tenant` in `sql_prepare.rs`. It asks the live schema which
+tables carry `tenant_id` (**50**, not a hand-kept list that would drift), works out which tables each
+of the 335 extracted statements touches, and requires the statement to mention `tenant_id`.
+
+**Measured before designing the gate: 60 statements across 14 files fail that.** So the plan's
+"allow-list with a reason" was the wrong shape — 60 justifications written in one sitting is
+rubber-stamping, and a file of unread reasons is worse than an honest number. It is a **ratchet**
+instead (`TENANT_PREDICATE_BASELINE`, per file):
+
+- a file may not EXCEED its number → a new unscoped statement fails CI;
+- a file may not fall BELOW it without the number being lowered → an unrecorded improvement can be
+  silently undone later.
+
+Per file, not per line: line numbers churn and a baseline nobody can keep current gets deleted.
+
+**Proven by planting one.** A `SELECT count(*) FROM devices` added to `invites.rs` moved that file
+from 2 to 3 and failed the gate, naming the file, the line and the table. Without that step this
+would be another test that passes forever.
+
+**What the 60 actually are.** Mostly `WHERE id = $1` — a row addressed by its own unguessable UUID,
+already resolved by a tenant-scoped query upstream. Safe by unguessability, not by construction;
+closing exactly that is what Phase 2 is for. The rest are legitimately cross-tenant: queue
+consumers, the master console's `COUNT(*) FROM telegram_config`, invite acceptance by token.
+
+**What it does not check.** That `tenant_id` is used as a PREDICATE — naming it in a SELECT list
+passes. Tightening that needs a real SQL parser; a crude gate running today beats a correct one
+that never lands.
 
 ## Open decisions
 
