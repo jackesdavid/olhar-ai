@@ -170,6 +170,38 @@ check:pipeline-shape:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+check:tenant-isolation:
+  stage: check
+  image: rust:1-bookworm
+  interruptible: true
+  # Card #160 Phase 1. `crates/app-core/tests/tenant_isolation.rs` seeds TWO tenants with
+  # overlapping data, drives the real repo functions as tenant A, and asserts nothing belonging to
+  # B comes back. It existed and passed since it was written — and never ran anywhere, which makes
+  # it worth exactly as much as no test at all. This job is what turns it into a gate.
+  #
+  # It has its OWN job rather than a second line in check:sql on purpose: a cross-tenant read is an
+  # incident, and a pipeline that reports it as "check:sql failed" buries that. This repository has
+  # been burned twice by signals that were technically red in the wrong place.
+  #
+  # Same service as check:sql — the migrations need pg_cron, and pg_cron only lets you create the
+  # extension in the database named by `cron.database_name`, so the DB must be `sentinel`.
+  services:
+    - name: $CI_REGISTRY_IMAGE/sentinel-postgres:latest
+      alias: sentinel-db
+      command: ["postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=sentinel"]
+  variables:
+    POSTGRES_DB: sentinel
+    POSTGRES_USER: sentinel
+    POSTGRES_PASSWORD: sentinel
+    TEST_DATABASE_URL: postgres://sentinel:sentinel@sentinel-db:5432/sentinel
+  script:
+    # Serial: every test migrates the same database on connect, and seven of them racing produces
+    # "constraint already exists" from concurrent migration rather than an isolation failure.
+    - cargo test -p app-core --test tenant_isolation -- --nocapture --test-threads=1
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 check:media:
   stage: check
   image: rust:1-bookworm

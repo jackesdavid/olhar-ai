@@ -88,6 +88,25 @@ Mirroring `face_knn_bench.rs`: measure the property, do not assert the fix.
 
 Without the negative control this test will pass forever regardless of whether isolation works.
 
+**Phase 1 is BUILT — and until 2026-08-18 it never ran.** `crates/app-core/tests/tenant_isolation.rs`
+has seven tests including the negative control, and they all pass. Nothing executed them: `check:sql`
+runs only `sql_prepare`. A test nobody runs is worth exactly what no test is worth, which is the
+failure mode this very plan warns about two sections up. `check:tenant-isolation` in `.gitlab-ci.yml`
+is what makes it a gate.
+
+Two things learned running it, recorded so the next person does not lose an hour:
+
+- **It must run `--test-threads=1`.** Every test migrates the same database on connect; seven racing
+  produces `constraint "devices_tenant_fkey" already exists`, which reads like a schema bug and is
+  not one.
+- **It cannot run against a scratch database.** pg_cron refuses to create its extension anywhere but
+  the database named in `cron.database_name`, so the database must be called `sentinel` — a fresh
+  container, not a second database inside an existing one.
+
+Measured on a clean run: `superuser=true bypassrls=true; tables with RLS enabled: 0`. The test
+connects as the OWNER, so it proves the application's predicates work — it says nothing about
+whether RLS would hold, which is Phase 2's job.
+
 ### Phase 2 — Make RLS possible at all
 
 > **UNBLOCKED as of 2026-08-12 — step 1 is already done.** This used to read "blocked on #173":
