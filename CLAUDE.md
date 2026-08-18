@@ -18,6 +18,9 @@ matches your task:
   cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
 - **[Tuya integration](docs/ref/tuya.md)** — smart-home provider: one operator Tuya Cloud project
   (HMAC-signed), per-tenant device catalog, the Control/Read Tuya nodes + Integrations page.
+- **[Mobile push](docs/ref/push.md)** — the phone Recipient channel: Expo → APNs/FCM, the TWO
+  credentials that must both be right (`EXPO_ACCESS_TOKEN` and a Sandbox **&** Production APNs key),
+  and the diagnostics — including why a rejected push currently looks like a delivered one.
 - **[Map (floor plan)](docs/ref/map.md)** — the Map page: top-down 3D blueprint editor (rooms as
   zones, drawn walls + SVG furniture markers, camera FOV), the `RecordPresence` node + live
   categorized presence pulse, the vertical file layout, and build status. (Active: branch

@@ -6,6 +6,56 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-17 — push worked end to end, after TWO stacked 403s
+
+- **Branch:** `main`, all merged and deployed. HEAD `1807f6a`.
+- **Commits:** `8892899` (#178 Expo token) · `c823748` (mobile fullscreen + run list) ·
+  `582f5df`/`8e23425` (cards #187–#190) · `ef90e90` (#187 phone test/delete) · `4e3ee23` (close #187).
+- **MRs:** !105, !106, !107, !108, !109 — all merged.
+
+**The headline.** Device Gate pushes had been failing since the TestFlight install. There were
+**two** independent 403s stacked, and the second only became visible once the first was fixed:
+
+1. **Expo refused us.** An org-owned Expo project has *Enhanced Security for Push Notifications* on,
+   so every send without `Authorization: Bearer <access token>` is rejected. Fixed in
+   `push.rs` (#178) and the token written into `/ibbf/sentinel.env` — never through a terminal.
+2. **Apple refused Expo.** The `.p8` key `58958PJYH9` had been created **Sandbox-only**, while a
+   TestFlight build registers a *production* device token → `BadEnvironmentKeyInToken (403)`.
+   Replaced with `UN3WKYR259` (Sandbox & Production), uploaded to EAS by API. **No rebuild was
+   needed** — push keys are server-side.
+
+**What made this expensive is worth more than the fix.** Between the two, the run log read
+`Device Gate: asked iPhone` → `expired → failure` — which is exactly what a person ignoring the
+prompt looks like. We read Expo's *ticket* ("queued") and never its *receipt* ("APNs said no, and
+here is why"). Card **#190** exists for that. The key was a ten-minute correction once named; the
+silence cost the day.
+
+**How the cause was actually pinned**, since deduction kept producing plausible wrong answers:
+sending a deliberately invalid device token to both Apple hosts with a JWT signed by the key. APNs
+validates the provider token before the device token, so production answering `403
+BadEnvironmentKeyInToken` while sandbox answered `400 BadDeviceToken` isolated the key, with nothing
+delivered to anyone. Recipe kept in `docs/ref/push.md`.
+
+- **Done:** #178 (Expo token), the APNs key swap, #187 (test + remove a phone Recipient, validated
+  in production by the owner on iPhone AND iPad), mobile fullscreen live video + compact run list.
+- **State:** `task check` 0 errors. Deploy pipeline `2766568151` green, `sentinel-app` recreated.
+  Push verified three ways: my receipt probe (`status: "ok"`), the product's own Test button, and
+  the owner's devices. Android/FCM **not exercised at all**.
+- **Pending / next:** **#188** (a dangling recipient auto-selects the first in the list — the most
+  dangerous of the open set, and easy to trigger now that three devices have similar names) ·
+  **#190** (read receipts) · **#189** (Recipients in tabs) · **#186** (Device Gate phone-only
+  picker) · the half of #187 Phase 2 that counts affected workflows before deleting.
+- **Blockers:** none technical. Left for the owner to decide: the stale `.vscode/settings.json` +
+  `tasks.json` deletions and untracked `ai/.vscode/` sitting in the working tree, unrelated to this
+  work and deliberately not swept into a commit. Also still open from #185: App Privacy answers,
+  screenshots/listing, the iPad keep-or-drop call (an iPad is now registered and receiving push),
+  and counsel review of the legal text.
+- **Refs:** `docs/ref/push.md` (new), `docs/plans/push-receipts-not-just-tickets.md`,
+  `docs/plans/dangling-recipient-must-not-autoselect.md`, `docs/plans/recipients-phone-parity.md`,
+  `docs/plans/recipients-tabs.md`
+
+---
+
 ## 2026-08-13 — #180 copy/paste rewritten to spec (paste at the cursor)
 
 - **Branch:** `main`, deployed and CONFIRMED WORKING by the user. HEAD `898255d`.
