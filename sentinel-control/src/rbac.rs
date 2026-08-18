@@ -28,7 +28,14 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("billing.read", "View billing, plan, and invoices"),
     ("billing.write", "Subscribe to a plan and manage payment"),
     ("tuya.read", "View and sync Tuya smart-home devices"),
-    ("tuya.write", "Link a Tuya account and edit device labels"),
+    // Since #191 this also SENDS commands: the Integrations console writes a data point
+    // straight to the device. On this account that means opening a gate from a browser, so the
+    // description has to say so — a permission whose blurb understates it is how someone grants
+    // "edit labels" and hands over the front door. A separate `tuya.control` is card #192.
+    (
+        "tuya.write",
+        "Link a Tuya account, edit device labels, and send commands to devices",
+    ),
     ("assistant.use", "Use the AI assistant (chat, voice)"),
 ];
 

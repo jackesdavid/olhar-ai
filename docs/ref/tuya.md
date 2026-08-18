@@ -137,6 +137,30 @@ asked. Both assumptions were wrong, and the second produced a confident safety w
 apply. A device capture is only evidence if someone looking at the device says what state it was
 in — the timestamps prove a change happened, never which way.
 
+## The device console (#191, 2026-08-18)
+
+`/settings/integrations?tab=tuya` expands a device into a **console**: every data point readable and
+individually sendable, so a person proves what a device does before a workflow depends on it.
+
+Three things make it work, and all three were already in the data:
+
+- **`values` and `access`** are cached per function by `tuya/client.rs` from the v2.0 thing model.
+  The page used to map every point down to `{code, type}` and discard both — which is why a
+  read-only limit switch looked identical to a command. With them restored, an enum renders its
+  range, an integer its bounds, and **`access: "ro"` renders no control at all**.
+- **`POST /tuya/devices/:id/test` already writes.** Given `{code, value}` it calls `send_command`;
+  given neither it calls `get_status`. No route was added for the console. The name is now a
+  misnomer — a "test" that opens a gate — but a second endpoint doing the same thing would be worse.
+- **Sorting by the first integer in the code** groups a channel: `gate1`, `gate1_fca`, `gate1_fcf`,
+  `gate1_status`, then `gate2_*`, then unnumbered device-wide points. Channel first, because a
+  command and its limit switch are the pair that proves a write landed.
+
+**Security boundary.** The console is a browser writing to physical hardware. It is gated on
+`tuya.write` and every send passes through a confirm naming device, control and value. `tuya.write`
+was documented as "link an account and edit device labels" — it now also opens gates, and the
+catalog description was corrected to say so. Splitting control out into its own `tuya.control` is
+card **#192**; until then, granting label-editing grants the front door.
+
 ## File layout
 
 | Path | What |
@@ -193,5 +217,9 @@ walkthrough is in the Integrations page.
 
 - **Done + LIVE.** Per-tenant BYO creds, friendly labels, dynamic typed value in/out — all deployed
   and validated in prod (BYO flow dogfooded end-to-end: connect → sync → toggle relay).
-- **Backlog:** #132 (filter non-controllable String data points from the dropdown), #133 (local
-  control via edge). OEM self-service app = deferred product decision.
+- **Done + LIVE.** The per-control console (#191) — read all, send one, confirmed, channel-grouped,
+  read-only points inert. Validated in production on the Garen gate board.
+- **Backlog:** #192 (split `tuya.control` out of `tuya.write`), #132 (filter non-controllable String
+  data points from the dropdown). OEM self-service app = deferred product decision.
+- **Closed, not done:** #133 (local control via the edge) — closed 2026-08-17 by the owner. Cloud
+  control is good enough in practice; the map and its decision tickets stay as research.

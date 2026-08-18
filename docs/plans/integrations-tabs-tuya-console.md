@@ -99,21 +99,33 @@ thing would be worse than a bad name. Left as is, recorded here.
 5. Reading a single control after a send shows the changed value — the pair that proves the write.
 6. A device that is offline says so per control rather than failing silently.
 
-## Open decisions
+## Audit — resolved (2026-08-18, validated in production)
 
-1. **Does Telegram's tenant config move here from `/beacons`?** It should: Integrations = providers
-   and credentials, Recipients = the people and phones that receive. That splits cleanly and kills
-   the current oddity of configuring Telegram on the Recipients screen. But it overlaps **#189**,
-   which proposed a Telegram tab on Recipients. Proposed: **the provider config moves to
-   Integrations; #189's Telegram tab keeps only the paired-recipient table**, and #189 is amended
-   rather than both shipping a "Telegram tab" that mean different things.
-2. **Sort by channel number or by name-then-number?** Both group `gate1`/`gate1_fca` identically.
-   Channel-first also groups `switch_1` with `countdown_1`, which is right when testing a channel
-   and wrong when scanning for a control by name. Proposed: channel-first, revisit if it reads badly
-   on a device with many unrelated numbered points.
-3. **Should the console poll?** A gate takes ~7s to travel. Auto-refreshing the read after a send
-   would show the state settle. Out of scope for v1 — one manual Read is enough to prove it — but it
-   is what #184 needs anyway.
+1. **Telegram config moved to Integrations.** Confirmed by the owner. `#189` amended: its Telegram
+   tab keeps only the paired-recipient table, so the two screens do not both grow a "Telegram" tab
+   meaning different things. Recipients still reads the config (not edits it) for the enrollment
+   link in its empty state, which now links here.
+2. **Sort is channel-first.** Reads correctly on the Garen board: `door_control_1` + `gate1*` under
+   Channel 1, `gate2*` under Channel 2, `luz`/`panic`/`social_gate*` under Device. Revisit only if a
+   device turns up with many unrelated numbered points.
+3. **No polling.** One manual Read after a send is enough to prove the write. Continuous refresh is
+   what #184 needs anyway; it stays out of here.
+
+**What the work assumed.** That `access` is trustworthy — a point marked `ro` is genuinely
+unwritable. If Tuya ever mislabels one, the console hides a control rather than offering a
+dangerous one, which is the safe direction to be wrong in. Devices synced before the thing model
+was read carry no `access` and are treated as writable, matching the old behaviour rather than
+hiding every control on a stale device.
+
+**Security boundary.** Gated on `tuya.write`, whose catalog description said "link a Tuya account
+and edit device labels" and now also opens gates. Description corrected in `rbac.rs`; splitting a
+real `tuya.control` out is card **#192**. No credential is rendered or logged by the console — it
+sends `{code, value}` and shows what came back.
+
+**A layout revision happened.** The first cut put identity, value, widget, Send and the name input
+in one flex row; widget widths vary, so no two Send buttons aligned. Split into `Test | Names`
+modes on fixed grid tracks. Recorded because "it built and deployed" was true of the bad version
+too.
 
 ## Out of scope
 
