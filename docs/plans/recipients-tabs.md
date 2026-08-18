@@ -19,10 +19,12 @@ possible recipient — the section does not render at all.
 
 ## The three tabs
 
-- **Onboarding** — how someone *becomes* a recipient. The Telegram pairing code and its QR, and
-  next to it the app invite (#181) with its own QR. Both are "point a phone at this", so they
-  belong side by side; today they live on different screens.
-- **Telegram** — the beacons table alone.
+- **Onboarding** — how someone *becomes* a recipient. The app invite (#181) and its QR.
+  **AMENDED by #191 (2026-08-17):** the Telegram pairing code and enrollment QR moved to
+  `/settings/integrations?tab=telegram`, because that is where a PROVIDER is configured. This screen
+  is who receives. So Onboarding here covers the app side, and links to Integrations for Telegram
+  rather than duplicating a second copy of the same controls.
+- **Telegram** — the beacons table alone. **Not** the bot config: that is Integrations now (#191).
 - **Apps** — the phones table alone, **always rendered**, with an empty state that points at the
   Onboarding tab rather than at nothing.
 

@@ -37,8 +37,6 @@ kanban-plugin: board
 
 ## Specification
 
-- [ ] #191 Integrations screen in tabs + a testable Tuya device console
-	  - Plan: [[integrations-tabs-tuya-console]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
@@ -118,6 +116,8 @@ kanban-plugin: board
 
 ## Generation
 
+- [ ] #191 Integrations screen in tabs + a testable Tuya device console
+	  - Plan: [[integrations-tabs-tuya-console]]
 - [ ] #185 Mobile production launch — App Store review readiness
 	  - Plan: [[mobile-app-store-launch]]
 	    a per-device Test that reads status + reports the round-trip. Phase 5 (sync count +

@@ -80,18 +80,15 @@ touch, and #182 already cost a real gate opening on an unverified assumption.
 **Every write asks first.** These are physical devices — a gate, a lock. The confirm names the
 device, the control and the value being sent.
 
-## Phase 4 — the endpoints
+## Phase 4 — the endpoints: NOT NEEDED
 
-Control has no per-control write today; only `POST /tuya/devices/:id/test`, which reads everything.
-`app_core::tuya::client::{get_status, send_command}` already exist and are used by the workflow
-nodes, so this is a thin route layer:
+Found while building: `POST /tuya/devices/:id/test` **already sends**. Its `TestReq` is
+`{ code, value }` — with both present it calls `send_command`, with neither it calls `get_status`
+(`sentinel-control/src/domain/tuya.rs`), and `data.ts:293` already types the optional argument. So
+the console is pure front end; no new route, no new permission surface.
 
-- `GET  /tuya/devices/:id/status` — read all points (used to seed the console and refresh it)
-- `POST /tuya/devices/:id/command` — `{ code, value }`, one point, echoing the round-trip ms
-
-Both gated on the same permission the existing Tuya routes use. The command endpoint is a **write to
-the physical world from a browser** — it belongs behind the same RBAC action as running a workflow
-that does the same thing, not a weaker one.
+The name is now a lie — "test" writes to a gate — but adding a second route that does the same
+thing would be worse than a bad name. Left as is, recorded here.
 
 ## Verification criteria
 
