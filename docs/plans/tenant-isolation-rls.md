@@ -88,6 +88,25 @@ Mirroring `face_knn_bench.rs`: measure the property, do not assert the fix.
 
 Without the negative control this test will pass forever regardless of whether isolation works.
 
+**Phase 1 is BUILT — and until 2026-08-18 it never ran.** `crates/app-core/tests/tenant_isolation.rs`
+has seven tests including the negative control, and they all pass. Nothing executed them: `check:sql`
+runs only `sql_prepare`. A test nobody runs is worth exactly what no test is worth, which is the
+failure mode this very plan warns about two sections up. `check:tenant-isolation` in `.gitlab-ci.yml`
+is what makes it a gate.
+
+Two things learned running it, recorded so the next person does not lose an hour:
+
+- **It must run `--test-threads=1`.** Every test migrates the same database on connect; seven racing
+  produces `constraint "devices_tenant_fkey" already exists`, which reads like a schema bug and is
+  not one.
+- **It cannot run against a scratch database.** pg_cron refuses to create its extension anywhere but
+  the database named in `cron.database_name`, so the database must be called `sentinel` — a fresh
+  container, not a second database inside an existing one.
+
+Measured on a clean run: `superuser=true bypassrls=true; tables with RLS enabled: 0`. The test
+connects as the OWNER, so it proves the application's predicates work — it says nothing about
+whether RLS would hold, which is Phase 2's job.
+
 ### Phase 2 — Make RLS possible at all
 
 > **UNBLOCKED as of 2026-08-12 — step 1 is already done.** This used to read "blocked on #173":
@@ -109,6 +128,26 @@ Without the negative control this test will pass forever regardless of whether i
 3. A `BYPASSRLS` service role for the paths that are legitimately cross-tenant: the master console,
    the pg_cron sweeps (events retention, TTLs), and the `work_jobs` queue consumers.
 
+**The mechanism is now PROVEN, in tests, before any migration (2026-08-18).** `tenant_isolation.rs`
+gained two:
+
+- `rls_does_nothing_for_a_superuser_or_owner_which_is_the_whole_trap` — enables RLS, adds a policy,
+  and asserts the owner **still sees both tenants**. That is the state a naive "enable RLS" commit
+  ships, and it is indistinguishable from working unless someone counts rows. Output:
+  `trap confirmed: RLS enabled + policy present, owner still sees 2 rows`.
+- `rls_isolates_a_non_owner_role_and_fails_closed_without_the_session_variable` — with `FORCE` on and
+  a non-owner role, it asserts all four properties: a query with no `app.tenant_id` **errors**
+  (fails closed, not "returns nothing"), an unqualified `SELECT` sees one tenant, an unqualified
+  `UPDATE` rewrites one row, and the other tenant's row is byte-identical afterwards.
+
+Both run on a scratch `rls_probe` table and role, created and dropped by the test, so nothing
+application-owned is touched. The policy deliberately uses `current_setting('app.tenant_id')`
+**without** the `missing_ok` argument: a forgotten `SET LOCAL` then raises, instead of silently
+returning an empty list that a caller cannot distinguish from "no data".
+
+So the migration can now be written against a mechanism known to work here, rather than hoping.
+What remains is the risky half, unchanged:
+
 Changing the connecting role is a production cutover with a real rollback story. It must be proven
 against a restored copy of production before it touches the live database.
 
@@ -120,11 +159,35 @@ call sites onto it.
 recordings (video), then `events`, then the rest. Each table can be `FORCE`d the moment its readers
 are converted, so isolation lands incrementally and every step is independently verifiable.
 
-### Phase 4 — Make omission impossible to reintroduce
-Extend `sql_prepare` (which already parses every literal statement) to assert that any statement
-touching a tenant-scoped table either carries a `tenant_id` predicate or is explicitly allow-listed
-with a reason. That is the cheap compile-time-ish half of strategy B, and it covers the call sites
-Phase 3 has not converted yet.
+### Phase 4 — Make omission impossible to reintroduce — **BUILT 2026-08-18**
+
+`every_tenant_scoped_statement_names_the_tenant` in `sql_prepare.rs`. It asks the live schema which
+tables carry `tenant_id` (**50**, not a hand-kept list that would drift), works out which tables each
+of the 335 extracted statements touches, and requires the statement to mention `tenant_id`.
+
+**Measured before designing the gate: 60 statements across 14 files fail that.** So the plan's
+"allow-list with a reason" was the wrong shape — 60 justifications written in one sitting is
+rubber-stamping, and a file of unread reasons is worse than an honest number. It is a **ratchet**
+instead (`TENANT_PREDICATE_BASELINE`, per file):
+
+- a file may not EXCEED its number → a new unscoped statement fails CI;
+- a file may not fall BELOW it without the number being lowered → an unrecorded improvement can be
+  silently undone later.
+
+Per file, not per line: line numbers churn and a baseline nobody can keep current gets deleted.
+
+**Proven by planting one.** A `SELECT count(*) FROM devices` added to `invites.rs` moved that file
+from 2 to 3 and failed the gate, naming the file, the line and the table. Without that step this
+would be another test that passes forever.
+
+**What the 60 actually are.** Mostly `WHERE id = $1` — a row addressed by its own unguessable UUID,
+already resolved by a tenant-scoped query upstream. Safe by unguessability, not by construction;
+closing exactly that is what Phase 2 is for. The rest are legitimately cross-tenant: queue
+consumers, the master console's `COUNT(*) FROM telegram_config`, invite acceptance by token.
+
+**What it does not check.** That `tenant_id` is used as a PREDICATE — naming it in a SELECT list
+passes. Tightening that needs a real SQL parser; a crude gate running today beats a correct one
+that never lands.
 
 ## Open decisions
 

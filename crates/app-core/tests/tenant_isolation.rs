@@ -367,3 +367,176 @@ fn baseline_the_database_enforces_no_isolation_of_its_own() {
         );
     });
 }
+
+// =================================================================================================
+// Phase 2 — PROVE the RLS mechanism before writing the migration.
+//
+// The plan's own warning: the obvious first commit (ENABLE ROW LEVEL SECURITY + a policy) deploys
+// clean, passes every test, and changes nothing at all — because table OWNERS bypass RLS, and a
+// SUPERUSER bypasses it unconditionally, which `FORCE` does not fix. That is the same shape as the
+// HNSW index that sat unused behind a cast while every test was green.
+//
+// So these tests do the whole thing on a scratch table, end to end, and assert each step of the
+// trap separately. They are the proof harness the real migration gets written against: when
+// `faces` is FORCEd for real, the mechanism it relies on is already known to work here.
+//
+// Nothing here touches an application table. The probe table and role are created and dropped by
+// the test.
+
+const PROBE_TABLE: &str = "rls_probe";
+const PROBE_ROLE: &str = "rls_probe_app";
+
+/// Set up `rls_probe` with two tenants' rows, RLS enabled + FORCEd, one policy keyed on the
+/// session variable, and a non-owner role that can read and write it.
+async fn setup_probe(pool: &PgPool, a: uuid::Uuid, b: uuid::Uuid) {
+    for stmt in [
+        format!("DROP TABLE IF EXISTS {PROBE_TABLE}"),
+        format!("DROP ROLE IF EXISTS {PROBE_ROLE}"),
+        format!("CREATE TABLE {PROBE_TABLE} (id serial primary key, tenant_id uuid not null, note text)"),
+        format!("CREATE ROLE {PROBE_ROLE} LOGIN PASSWORD 'probe'"),
+        format!("GRANT SELECT, INSERT, UPDATE, DELETE ON {PROBE_TABLE} TO {PROBE_ROLE}"),
+        format!("GRANT USAGE, SELECT ON SEQUENCE {PROBE_TABLE}_id_seq TO {PROBE_ROLE}"),
+        // The policy. `current_setting(name)` WITHOUT the missing_ok argument raises when the
+        // setting is absent — deliberately, so a forgotten SET LOCAL fails CLOSED with an error
+        // rather than silently returning nothing, which would look like "no data" to a caller.
+        format!(
+            "CREATE POLICY tenant_isolation ON {PROBE_TABLE} \
+             USING (tenant_id = current_setting('app.tenant_id')::uuid) \
+             WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid)"
+        ),
+    ] {
+        sqlx::query(&stmt).execute(pool).await.expect(&stmt);
+    }
+    for (t, note) in [(a, "belongs to A"), (b, "belongs to B")] {
+        sqlx::query(&format!("INSERT INTO {PROBE_TABLE} (tenant_id, note) VALUES ($1, $2)"))
+            .bind(t)
+            .bind(note)
+            .execute(pool)
+            .await
+            .expect("seed probe");
+    }
+}
+
+async fn drop_probe(pool: &PgPool) {
+    for stmt in [
+        format!("DROP TABLE IF EXISTS {PROBE_TABLE}"),
+        format!("DROP ROLE IF EXISTS {PROBE_ROLE}"),
+    ] {
+        let _ = sqlx::query(&stmt).execute(pool).await;
+    }
+}
+
+/// A pool connecting as the NON-OWNER role, which is what production's `sentinel_app` is.
+async fn probe_pool(url: &str) -> PgPool {
+    let swapped = url
+        .replace("sentinel:sentinel@", &format!("{PROBE_ROLE}:probe@"))
+        .replace("postgres:postgres@", &format!("{PROBE_ROLE}:probe@"));
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&swapped)
+        .await
+        .expect("connect as probe role")
+}
+
+#[test]
+fn rls_does_nothing_for_a_superuser_or_owner_which_is_the_whole_trap() {
+    let Some((_db, pool, rt, f)) = setup() else { return };
+    rt.block_on(async {
+        setup_probe(&pool, f.a, f.b).await;
+
+        // RLS on, policy present, FORCE not yet applied: the OWNER still sees everything. This is
+        // the state a naive "enable RLS" commit would ship, and it is indistinguishable from
+        // working unless someone counts rows.
+        sqlx::query(&format!("ALTER TABLE {PROBE_TABLE} ENABLE ROW LEVEL SECURITY"))
+            .execute(&pool)
+            .await
+            .expect("enable rls");
+        let seen: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {PROBE_TABLE}"))
+            .fetch_one(&pool)
+            .await
+            .expect("owner select");
+        assert_eq!(
+            seen, 2,
+            "the connecting role stopped seeing both tenants — if it is no longer a superuser/owner \
+             this test has served its purpose and should be rewritten"
+        );
+        println!("trap confirmed: RLS enabled + policy present, owner still sees {seen} rows");
+
+        drop_probe(&pool).await;
+        cleanup(&pool, &f).await;
+    });
+}
+
+#[test]
+fn rls_isolates_a_non_owner_role_and_fails_closed_without_the_session_variable() {
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else { return };
+    let Some((_db, pool, rt, f)) = setup() else { return };
+    rt.block_on(async {
+        setup_probe(&pool, f.a, f.b).await;
+        for stmt in [
+            format!("ALTER TABLE {PROBE_TABLE} ENABLE ROW LEVEL SECURITY"),
+            format!("ALTER TABLE {PROBE_TABLE} FORCE ROW LEVEL SECURITY"),
+        ] {
+            sqlx::query(&stmt).execute(&pool).await.expect(&stmt);
+        }
+
+        let app = probe_pool(&url).await;
+
+        // 1. Fails CLOSED with no tenant set. Not "sees nothing" — an ERROR, so a forgotten
+        //    SET LOCAL is a loud bug in development rather than a silent empty list in production.
+        let no_setting: Result<i64, _> =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {PROBE_TABLE}"))
+                .fetch_one(&app)
+                .await;
+        assert!(
+            no_setting.is_err(),
+            "a query with no app.tenant_id returned rows instead of failing closed"
+        );
+
+        // 2. With the tenant set, an UNQUALIFIED select sees only that tenant.
+        let mut tx = app.begin().await.expect("begin");
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(f.a.to_string())
+            .execute(&mut *tx)
+            .await
+            .expect("set local");
+        let rows: Vec<(uuid::Uuid, String)> =
+            sqlx::query_as(&format!("SELECT tenant_id, note FROM {PROBE_TABLE}"))
+                .fetch_all(&mut *tx)
+                .await
+                .expect("scoped select");
+        assert_eq!(rows.len(), 1, "expected only tenant A's row, got {rows:?}");
+        assert_eq!(rows[0].0, f.a);
+
+        // 3. An UNQUALIFIED update — the forgotten-WHERE case — rewrites only that tenant's row.
+        let touched = sqlx::query(&format!("UPDATE {PROBE_TABLE} SET note = 'rewritten'"))
+            .execute(&mut *tx)
+            .await
+            .expect("scoped update")
+            .rows_affected();
+        assert_eq!(touched, 1, "an unqualified UPDATE touched {touched} rows, not 1");
+        tx.commit().await.expect("commit");
+
+        // 4. Tenant B's row is untouched, proven from the owner connection which sees everything.
+        let b_note: String = sqlx::query_scalar(&format!(
+            "SELECT note FROM {PROBE_TABLE} WHERE tenant_id = $1"
+        ))
+        .bind(f.b)
+        .fetch_one(&pool)
+        .await
+        .expect("read B");
+        assert_eq!(
+            b_note, "belongs to B",
+            "tenant B's row was rewritten by tenant A's unqualified UPDATE"
+        );
+
+        println!(
+            "RLS proven: fails closed without app.tenant_id; unqualified SELECT and UPDATE both \
+             confined to one tenant"
+        );
+
+        app.close().await;
+        drop_probe(&pool).await;
+        cleanup(&pool, &f).await;
+    });
+}
