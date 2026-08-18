@@ -194,7 +194,13 @@ async fn test_device(
     Path(device_id): Path<String>,
     Json(b): Json<TestReq>,
 ) -> Result<Json<Value>, ApiErr> {
-    auth::require(&c, "tuya.write")?;
+    // One endpoint, two very different acts. With `code` + `value` it WRITES a data point — on
+    // this account, that opens a gate — so it needs `tuya.control` (#192). Without them it only
+    // reads status, which is a read. Checking the payload rather than the route is deliberate:
+    // the route name ("test") describes neither, and #191 chose reusing it over adding a second
+    // endpoint that did the same thing.
+    let writing = b.code.is_some() && b.value.is_some();
+    auth::require(&c, if writing { "tuya.control" } else { "tuya.read" })?;
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let out = blocking(move || -> Result<Value, String> {

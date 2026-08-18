@@ -9,6 +9,7 @@
   import X from "@lucide/svelte/icons/x";
   import { onMount } from "svelte";
   import { data } from "$lib/data";
+  import { hasPerm } from "$lib/auth.svelte";
   import { toast } from "svelte-sonner";
 
   import * as Card from "$lib/components/ui/card";
@@ -26,6 +27,9 @@
 
   const t = $derived(dict[lang()].integrations);
   const c = $derived(dict[lang()].common);
+
+  /** May this user actually send a command? Reading status only needs tuya.read (#192). */
+  const canControl = $derived(hasPerm("tuya.control"));
 
   // Which provider is showing. In the URL (`?tab=telegram`) so a reload stays put and a link can
   // point at one provider — "where do I configure X" should be answerable with a link.
@@ -813,14 +817,21 @@
                                       />
                                     {/if}
                                   </div>
-                                  <Button
-                                    size="sm"
-                                    class="interactive w-full"
-                                    disabled={busy}
-                                    onclick={() => askSend(d, f)}
-                                  >
-                                    {busy ? t.sendingNow : t.send}
-                                  </Button>
+                                  <!-- Gated on tuya.control, not tuya.write (#192): sending a
+                                       command opens a gate, and offering a button that will 403
+                                       is worse than not offering it. -->
+                                  {#if canControl}
+                                    <Button
+                                      size="sm"
+                                      class="interactive w-full"
+                                      disabled={busy}
+                                      onclick={() => askSend(d, f)}
+                                    >
+                                      {busy ? t.sendingNow : t.send}
+                                    </Button>
+                                  {:else}
+                                    <span class="text-xs text-muted-foreground">{t.noControlPerm}</span>
+                                  {/if}
                                 {:else}
                                   <span class="text-xs text-muted-foreground">{t.sensorOnly}</span>
                                   <span></span>

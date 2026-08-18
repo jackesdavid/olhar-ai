@@ -155,11 +155,26 @@ Three things make it work, and all three were already in the data:
   `gate1_status`, then `gate2_*`, then unnumbered device-wide points. Channel first, because a
   command and its limit switch are the pair that proves a write landed.
 
-**Security boundary.** The console is a browser writing to physical hardware. It is gated on
-`tuya.write` and every send passes through a confirm naming device, control and value. `tuya.write`
-was documented as "link an account and edit device labels" — it now also opens gates, and the
-catalog description was corrected to say so. Splitting control out into its own `tuya.control` is
-card **#192**; until then, granting label-editing grants the front door.
+**Security boundary.** The console is a browser writing to physical hardware, and the two acts it
+performs need different rights (**#192**, done):
+
+| Act | Permission |
+|---|---|
+| Read a device's status | `tuya.read` |
+| Link an account, edit labels | `tuya.write` |
+| **Send a command — open a gate, switch a relay** | **`tuya.control`** |
+
+`POST /tuya/devices/:id/test` decides which to require from the PAYLOAD, not the route: with
+`code` + `value` it writes and needs `tuya.control`; without them it only reads. Checking the route
+name would be useless — it is called "test" and describes neither act.
+
+Every send also passes through a confirm naming device, control and value, and the Send button is
+hidden from a user without `tuya.control` rather than offered and then 403'd.
+
+**Existing tenants need no migration:** `seed.rs` upserts the catalog on boot and grants every
+action to each tenant's system Admin role. A CUSTOM role previously given `tuya.write` loses
+command-sending — which is the entire point, because that grant was never meant to include opening
+doors.
 
 ## File layout
 
