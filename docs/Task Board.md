@@ -6,18 +6,6 @@ kanban-plugin: board
 
 ## Backlog
 
-- [ ] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
-	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
-	  - Charted with /wayfinder. Four decision tickets in `docs/plans/tuya-local-map/`. Decided while
-	    charting: the edge becomes REQUIRED for Tuya (no cloud fallback, one path), and the node and
-	    its selectors do not change. Latency in ms, works with the internet down, no licence.
-	  - Does NOT remove the BYO onboarding — the local_key still comes from the Cloud API. It takes
-	    the cloud out of the EXECUTION path, not the configuration one.
-	  - Ticket 01 resolved: it is a CRATE, not a port — `rustuya` covers 3.1–3.5, MIT, pure Rust.
-	    A device accepts ONE TCP connection and drops idle sockets at ~30s, so the edge holds one
-	    persistent heartbeated connection per device — the camera ONE-PIPELINE rule again.
-	  - Remaining 02/03/04 are conversation tickets — they need a session, not an AFK agent. 04 is
-	    unblocked.
 - [ ] #1 School Student Frequency Case
 	  - Plan: [[school-student-frequency]]
 	  - Use case: [[school-frequence]]
@@ -49,6 +37,8 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #191 Integrations screen in tabs + a testable Tuya device console
+	  - Plan: [[integrations-tabs-tuya-console]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
 - [ ] #186 Device Gate offers recipients that can never answer
@@ -175,6 +165,13 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #133 Tuya local control [map] — the edge talks to the device on the LAN, cloud out of the path
+	  - Map: [[tuya-local-map]] · today's model: [[tuya]]
+	  - CLOSED 2026-08-17 by the owner: we are not pursuing LAN control this way. Cloud control
+	    through the one operator project is good enough in practice — the gate was proven moving
+	    end to end (#182) and the round-trip is acceptable. The map and its four decision tickets
+	    stay on disk as research, not as work.
+	  - What replaces it is #191: make the integration PROVABLE rather than faster.
 - [x] #187 Recipients: a phone can't be tested or deleted
 	  - Plan: [[recipients-phone-parity]]
 	  - VALIDATED in production by the owner. The dialog names the consequence of removing a
@@ -231,6 +228,6 @@ kanban-plugin: board
 
 %% kanban:settings
 ```
-{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false,false,false],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
+{"kanban-plugin":"board","list-collapse":[false,true,false,false,false,false,null,true],"show-checkboxes":true,"date-display-format":"YYYY-MM-DD","hide-date-in-title":true,"full-list-lane-width":true,"move-tags":true,"tag-colors":[{"tagKey":"","color":"","backgroundColor":""}],"inline-metadata-position":"footer","move-task-metadata":true}
 ```
 %%
