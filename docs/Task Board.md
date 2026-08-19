@@ -34,10 +34,14 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #198 Devices, Recipients and Integrations are split by the wrong rule
+	  - Plan: [[one-name-one-place]]
 - [ ] #196 On-demand graphs are indistinguishable from switched-off ones
 	  - Plan: [[on-demand-graphs-read-as-disabled]]
 - [ ] #189 Organise the Recipients screen into tabs
 	  - Plan: [[recipients-tabs]]
+	  - NARROWED by #198: no Onboarding tab — enrollment lives in Integrations.
+	    Two tabs, Telegram and Phones, or fold into #198.
 - [ ] #186 Device Gate offers recipients that can never answer
 	  - Plan: [[device-gate-phone-only-recipients]]
 - [ ] #184 State-aware device control — act on the real state, confirm it changed
