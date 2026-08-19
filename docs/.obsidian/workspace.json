@@ -4,32 +4,17 @@
     "type": "split",
     "children": [
       {
-        "id": "c48c5fbf8b27ca73",
+        "id": "b7cd2a8b6133ddea",
         "type": "tabs",
         "children": [
           {
-            "id": "b0c2853a209ba4bb",
+            "id": "8518e2148d78c50b",
             "type": "leaf",
             "state": {
-              "type": "kanban",
-              "state": {
-                "file": "Task Board.md",
-                "kanbanViewState": {
-                  "kanban-plugin": "board",
-                  "list-collapse": [
-                    false,
-                    true,
-                    false,
-                    false,
-                    false,
-                    false,
-                    null,
-                    true
-                  ]
-                }
-              },
-              "icon": "lucide-trello",
-              "title": "Task Board"
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
             }
           }
         ]
@@ -91,8 +76,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 230.5,
-    "collapsed": true
+    "width": 230.5
   },
   "right": {
     "id": "7890933a22997089",
@@ -108,9 +92,8 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "Task Board.md",
-                "collapseAll": false,
-                "extraContext": false,
+                "collapseAll": true,
+                "extraContext": true,
                 "sortOrder": "alphabetical",
                 "showSearch": false,
                 "searchQuery": "",
@@ -118,7 +101,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Task Board"
+              "title": "Backlinks"
             }
           },
           {
@@ -170,16 +153,16 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "Task Board.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of Task Board"
+              "title": "Outline"
             }
           }
-        ]
+        ],
+        "currentTab": 3
       }
     ],
     "direction": "horizontal",
@@ -193,18 +176,27 @@
       "canvas:Create new canvas": false,
       "daily-notes:Open today's daily note": false,
       "templates:Insert template": false,
-      "command-palette:Open command palette": false,
       "bases:Create new base": false,
+      "command-palette:Open command palette": false,
       "obsidian-kanban:Create new board": false,
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "b0c2853a209ba4bb",
+  "active": "8518e2148d78c50b",
   "lastOpenFiles": [
+    "Task Board.md",
+    "2026-08-18.md",
+    "Untitled.base",
+    "Untitled.canvas",
+    "plans/outcome-based-pricing.md",
+    "plans/one-name-one-place.md",
+    "plans/llm-cost-metering.md",
+    "Fitec Board.md",
+    "web-migration-plan.md",
+    "plans/disk-exhaustion-breaks-everything.md",
+    "HANDOFF.md",
     "plans/on-demand-graphs-read-as-disabled.md",
     "plans/armed-automations-gap.md",
-    "plans/outcome-based-pricing.md",
-    "plans/llm-cost-metering.md",
     "plans/integrations-tabs-tuya-console.md",
     "ref/push.md",
     "Task Board.md.tmp.7543.ae9ea689e5b8",
@@ -221,22 +213,13 @@
     "plans/device-gate-map/04-token-shape.md",
     "plans/device-gate-map/03-run-state-while-suspended.md",
     "plans/device-gate-map/02-biometrics-without-biometrics.md",
-    "plans/device-gate-map/01-who-may-answer.md",
     "plans/device-gate-map",
-    "plans/device-gate-map.md",
-    "agents/issue-tracker.md",
     "agents",
-    "plans/tuya-oem-map/06-sdk-coexistence-build.md",
-    "plans/tuya-oem-map/05-migration-off-byo.md",
-    "plans/tuya-oem-map/04-server-side-control.md",
-    "plans/tuya-oem-map/03-account-per-user-or-per-tenant.md",
-    "plans/tuya-oem-map/02-ios-bridge-feasibility.md",
     "plans/tuya-oem-map",
     "plans/mobile-edge-face-capture.md.tmp.14447.cf4b28e93ffa",
     "legal",
     "Task Board.md.tmp.20301.6d8cf89fd390",
     "Task Board.md.tmp.20301.d1d00185956d",
-    "Task Board.md.tmp.20301.5b8b6456152c",
     "plans/logo-exploration/warm-concepts-overview.png",
     "plans/logo-exploration/concept-5.svg",
     "plans/logo-exploration/concept-4.svg",
