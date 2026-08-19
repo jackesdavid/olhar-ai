@@ -22,6 +22,8 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #197 Disk exhaustion breaks builds, and clean-space can't reclaim the cause
+	  - Plan: [[disk-exhaustion-breaks-everything]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
