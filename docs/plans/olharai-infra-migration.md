@@ -111,7 +111,7 @@ Sentinel, distributed MinIO or R2) is a later, larger step — explicitly deferr
 
 ## Phase 3 — Reinstall the edges (operator, at the clients)
 - Fresh install on each box with `--control https://control.olharai.com` (new pairing code →
-  new box token, new Tailscale key). No re-point mechanism needed — it's a clean install.
+  new box token, new edge auth key). No re-point mechanism needed — it's a clean install.
 - After this phase, nothing in the field references the old control host.
 
 ## Phase 4 — Batch the external integrations (one pass, at the end)

@@ -226,7 +226,7 @@ Each run builds a `ToolContext` with the tenant's devices/alerts/beacons freshly
 Editor catalog auto-derives from `NodeKind::ALL` — adding a node kind needs `domain.rs` (enum
 + ALL + slug/label/category/ports/default_config) + a `run_node` arm; no `agent/tools.rs`
 change (that's the chat agent, not workflow nodes). An edge-facing action node (camera in,
-network call out) reaches the tenant's edge via `resolve_edge_api_base(sys)` (tailnet, port
+network call out) reaches the tenant's edge via `resolve_edge_api_base(sys)` (direct, port
 snapshot-only. If the new kind is really "react to X" rather than "fetch/do X", see **Gated
 events** above before reaching for a new node kind at all.
 

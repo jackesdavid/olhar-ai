@@ -122,8 +122,8 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   backend flag. `sentinel-edge/src/capture.rs` holds the ONE-PIPELINE-per-camera invariant: a
   consumer camera caps concurrent RTSP sessions at 2–4, so a second connection is how a working
   camera goes dark. Everything else hangs off `tee` branches.
-- **The edge is outbound-only** (card #144). No VPN, no tailnet — retired in full, code included
-  (#199). Cloud→edge calls go over the SSE command
+- **The edge is outbound-only** (card #144). No VPN of any kind — the private-mesh era is gone
+  from the code as well as the architecture (#199). Cloud→edge calls go over the SSE command
   channel (`app_core::edge_commands::edge_http_via_sse{,_blocking}`) — frames, probes, recordings,
   tracks. A direct HTTP call to a box from a cloud service reaches nothing.
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").

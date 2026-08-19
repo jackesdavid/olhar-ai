@@ -41,20 +41,17 @@ curl -fsSL https://control.thesentinels.online/edge/install.sh | sudo sh -s -- \
 `install.sh` now works here too — the edge links nothing, so it starts immediately instead of
 snapshots are affected, not live video/motion/tracking/recording).
 
-tailscale, so nothing touches the host). It runs `tailscaled` inside, so it needs host networking +
-the tun device + NET_ADMIN. The `--env-file` is the same `edge.env` the installer writes
-(CONTROL_URL, BOX_TOKEN, TS_AUTHKEY, TS_HOSTNAME, …):
+nothing touches the host). The edge is outbound-only (card #144), so it needs no VPN, no tun
+device and no NET_ADMIN — host networking stays only because it discovers cameras on the LAN.
+The `--env-file` is the same `edge.env` the installer writes (CONTROL_URL, BOX_TOKEN, …):
 
 ```sh
 # /etc/sentinel-edge/edge.env  (from the Boxes page one-liner values):
 #   CONTROL_URL=https://control.thesentinels.online
 #   BOX_TOKEN=sbx_xxxxxxxx
-#   TS_AUTHKEY=tskey-auth-xxxx
-#   TS_HOSTNAME=my-box
 
 podman run -d --name sentinel-edge --restart=always \
-  --network=host --cap-add=NET_ADMIN --cap-add=NET_RAW --device=/dev/net/tun \
-  -v sentinel-edge-tailscale:/var/lib/tailscale \
+  --network=host \
   -v sentinel-edge-data:/opt/sentinel-edge \
   --env-file /etc/sentinel-edge/edge.env \
   registry.gitlab.com/olharai-grupo/olharai/sentinel-edge:latest

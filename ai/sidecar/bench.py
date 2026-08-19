@@ -2,7 +2,7 @@
 """Latency benchmark for the Sentinel AI sidecar — compare backends (CPU VPS vs RTX 2060).
 
 Stdlib only: no insightface/numpy needed, so it runs from anywhere (your Mac, the VPS,
-a tailnet host) by just pointing it at a sidecar's /runsync URL. It posts a fixed,
+a LAN host) by just pointing it at a sidecar's /runsync URL. It posts a fixed,
 checked-in test face (testdata/face_test.jpg — a synthetic, license-clean face) so the
 two runs are directly comparable, and reports both the server compute time (`took_ms`,
 the apples-to-apples GPU-vs-CPU number) and client wall-clock (includes network).
@@ -10,7 +10,7 @@ the apples-to-apples GPU-vs-CPU number) and client wall-clock (includes network)
 Usage:
   # CPU sidecar on the VPS (run inside the container — it isn't published to the host):
   ssh Contabo 'docker exec -i sentinel-ai python /dev/stdin' < ai/sidecar/bench.py
-  # …or against the RTX 2060 box later, from anywhere on the tailnet:
+  # …or against the RTX 2060 box later, from anywhere that can reach it:
   AI_SERVICE_URL=http://<rtx-box>:8000/runsync python ai/sidecar/bench.py --n 50
   # other ops / image:
   python ai/sidecar/bench.py --op face_detect --image some_face.jpg
@@ -18,7 +18,7 @@ Usage:
 Baselines — face_detect_embed, the testdata face (record new numbers as you measure):
   InsightFace CPU  (VPS sentinel-ai, in-container)  server p50 ~409 ms, wall ~414 ms      (2026-06-15)
   InsightFace GPU  (RunPod serverless, from a Mac)  server p50 ~250 ms, wall ~1454 ms, cold-start ~74 s (2026-06-15)
-  InsightFace GPU  (RTX 2060, on tailnet)           TBD  ← expected: GPU compute + low LAN latency, no cold start
+  InsightFace GPU  (RTX 2060, on the LAN)           TBD  ← expected: GPU compute + low LAN latency, no cold start
 """
 import argparse
 import base64

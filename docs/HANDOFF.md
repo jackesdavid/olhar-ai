@@ -362,7 +362,7 @@ but worth checking in other clones.
     ourselves (LGPL, universal, signable). `deploy/macos-pkg/`. **DONE.** See [[apple-signing-82]] memory.
   - **#80 Windows edge** — cross-compiles from macOS with **zero code changes** (mingw-gnu target,
     `task edge-windows-build`); runtime-aware (`src/paths.rs` %ProgramData%, CREATE_NO_WINDOW on all
-    child spawns, TAILSCALE_BIN, self-update gated). 70MB self-contained .exe.
+    child spawns, self-update gated). 70MB self-contained .exe.
   - **#83 Windows installer** — `deploy/windows/{install,uninstall}.ps1` + `build-installer.sh`: real
     Windows SERVICE via WinSW (auto-start, restart-on-failure), pairing page. enroll.rs exits 1 on
     Windows so WinSW relaunches after pairing. **Zip published:**
@@ -449,7 +449,7 @@ but worth checking in other clones.
 - **Commits:** 5d32d0b
 - **Done:**
   - DB migration 0030: `tenant_boxes.recording_config` JSONB + `recordings` table (RFC3339 TEXT timestamps)
-  - sentinel-control: `recordings.read/write` permissions; `GET /recordings`, `POST /recordings`, `DELETE /recordings/:id`, `GET /recordings/:id/download` (proxies bytes from edge over tailnet); `PATCH /boxes/:id/recording-config`; edge-authenticated `GET /config/recording` + `POST /config/recordings/clip`
+  - sentinel-control: `recordings.read/write` permissions; `GET /recordings`, `POST /recordings`, `DELETE /recordings/:id`, `GET /recordings/:id/download` (proxies bytes from the edge); `PATCH /boxes/:id/recording-config`; edge-authenticated `GET /config/recording` + `POST /config/recordings/clip`
   - app-core: `StartRecording` + `StopRecording` NodeKind (ALL 48→50); edge host resolved from `tenant_boxes` via `sys.db`; ureq json feature enabled for `into_json`
   - sentinel-app: `Recording` type + `recordings` API (list/del/downloadUrl); `RecordingConfig` type + `boxes.patchRecordingConfig`; Recordings nav item (Clapperboard); `/recordings` page (table, empty state, download link, delete button); `recordings.read` NAV_PERM gate
   - E2E: `e2e/recordings.spec.ts` — empty-state check, seeded rows appear, delete removes row; seeds via `POST /recordings` (JWT with recordings.write)
@@ -490,13 +490,13 @@ but worth checking in other clones.
 
 ---
 
-## 2026-06-19 — GPU box setup: Tailscale + SSH + sidecar build (CUDA mismatch blocked)
+## 2026-06-19 — GPU box setup: network + SSH + sidecar build (CUDA mismatch blocked)
 
 - **Branch:** worktree `scalable-bouncing-hamming` off `new-ui`; plan note committed to `feat/map-redesign` via cherry-pick
 - **Commits:** `d966e5f` (face-recognition-next-steps plan + board card, on `feat/map-redesign`)
 - **Done:**
   - **Face recognition plan note:** `docs/plans/face-recognition-next-steps.md` — full state snapshot + 4-phase next-steps (DetectFaces node, live-feed triggers, GPU box upgrade, hardening). Board card added to ToDo.
-  - **GPU box access:** Tailscale on Bazzite Linux box (`100.84.250.126`). SSH alias `gpu-box` in `~/.ssh/config`, key `~/.ssh/id_rsa`. NOPASSWD sudo for `/usr/bin/podman` via `/etc/sudoers.d/sentinel-ai`.
+  - **GPU box access:** Bazzite Linux box (`100.84.250.126`). SSH alias `gpu-box` in `~/.ssh/config`, key `~/.ssh/id_rsa`. NOPASSWD sudo for `/usr/bin/podman` via `/etc/sudoers.d/sentinel-ai`.
   - **GPU confirmed:** RTX 2060 SUPER, driver 595.71.05 (CUDA 13.2 capable), CDI config present (`/etc/cdi/nvidia.yaml`), GPU passthrough works with `sudo podman`.
   - **Sidecar image built:** `localhost/sentinel-ai:gpu` (8.4 GB) on the box; container `sentinel-ai` running on port 8000. `Dockerfile.gpu` on box patches `FROM` with `docker.io/` prefix (Podman Fedora policy).
 - **State:** Sidecar running but on **CPUExecutionProvider** — GPU not active. `torch.cuda.is_available()` = True; problem is onnxruntime-gpu CUDA version.
@@ -566,9 +566,9 @@ but worth checking in other clones.
 - **Branch:** `feat/map-redesign` (off `main`); pushed. **Not** merged to `new-ui`.
 - **Commits:** `592a3da` → `c885862` (this session, on top of the earlier `321dc70…b39bcbf`).
 - **Done (all deployed to prod incrementally):**
-  - **Edge install:** `install.sh` self-heals the macOS `tailscaled` system daemon on both full
-    install and `--update` (idempotent `ensure_tailscaled_macos`, waits + warns) — fixed OfficeBox
-    "offline on tailnet". Moved the box install command from a modal to its own view
+  - **Edge install:** `install.sh` self-heals the macOS system daemon on both full install and
+    `--update` (idempotent, waits + warns) — fixed OfficeBox showing "offline". Moved the box
+    install command from a modal to its own view
     (`/settings/boxes/install`, `lib/box-install.svelte.ts`).
   - **Map crash:** `lib/map/{history,tools,view3d}` were plain `.ts` using runes → `$state is not
     defined` at runtime; renamed to `.svelte.ts` (+ import paths).

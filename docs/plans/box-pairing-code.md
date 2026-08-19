@@ -42,9 +42,9 @@ One artifact for everyone. No secret ever travels on a command line, and none is
 ## Security (the part to get right, not to hand-wave)
 
 - **Nothing secret at rest.** The pairing row stores only a **hash of the code** — never the code,
-  never the box token, never the Tailscale key. Redeeming *mints* a fresh box token (updating
-  `tenant_boxes.token_hash`, which is already how tokens are stored) and a fresh Tailscale auth key
-  (control has the OAuth client — `sentinel-control/src/tailscale.rs`). So a dump of `box_pairings`
+  never the box token, never the edge auth key. Redeeming *mints* a fresh box token (updating
+  `tenant_boxes.token_hash`, which is already how tokens are stored) and a fresh edge auth key
+  (control has the OAuth client — the key-minting path (removed in #199)). So a dump of `box_pairings`
   yields nothing usable.
 - **Single use, atomically.** `UPDATE … SET claimed_at = now() WHERE code_hash = $1 AND claimed_at
   IS NULL RETURNING …` — two racing redeems, one winner. (And per
@@ -57,7 +57,7 @@ One artifact for everyone. No secret ever travels on a command line, and none is
   has no credential yet), so it gets a per-IP rate limit and returns the same generic error for
   "wrong", "expired" and "already used" — no oracle.
 - **`CONTROL_URL` is not a secret** (it's a public hostname), so it can be baked into the generic
-  installer. Only the token and the Tailscale key are secrets, and those only ever exist in the
+  installer. Only the token and the edge auth key are secrets, and those only ever exist in the
   redeem response.
 
 ## Phase 1 — control
@@ -68,8 +68,8 @@ One artifact for everyone. No secret ever travels on a command line, and none is
 - `POST /boxes/:id/pairing-code` (auth, `devices.write`) → `{ code, expires_at }`. Additive: the
   existing `POST /boxes` (token + authkey + hostname, `domain/boxes.rs:77`) is untouched, so the
   headless one-liner keeps working.
-- `POST /enroll` (**no auth**, rate-limited) `{ code }` → `{ control_url, box_token, tailscale_key,
-  hostname }`. Claims the code, rotates the box token, mints the Tailscale key.
+- `POST /enroll` (**no auth**, rate-limited) `{ code }` → `{ control_url, box_token, edge_auth_key,
+  hostname }`. Claims the code, rotates the box token, mints the edge auth key.
 
 ## Phase 2 — edge: unenrolled mode
 
@@ -95,7 +95,7 @@ One artifact for everyone. No secret ever travels on a command line, and none is
 ## Verification
 
 - Create a box → get a code → run a **fresh** edge with no `BOX_TOKEN` → open `localhost:8788` →
-  type the code → the box appears in the Boxes page, tailnet `serving`, cameras pulled.
+  type the code → the box appears in the Boxes page, private link `serving`, cameras pulled.
 - Redeem the same code twice → the second is refused.
 - Redeem an expired code → refused, with the same message as a wrong one.
 - Wrong code, 20 times → rate-limited.
@@ -120,6 +120,6 @@ One artifact for everyone. No secret ever travels on a command line, and none is
 
 ## Out of scope (v1)
 
-- Re-pairing an already-enrolled box (that's [[box-rekey-enrollment]], #4).
+- Re-pairing an already-enrolled box.
 - QR codes / phone-based pairing.
 - Any change to what the box does *after* it's enrolled.

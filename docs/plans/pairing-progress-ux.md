@@ -87,6 +87,6 @@ stops working.
 
 ## Out of scope (v1)
 
-- Re-pairing an already-enrolled box (that's [[box-rekey-enrollment]], #4).
+- Re-pairing an already-enrolled box.
 - Showing live boot logs in the browser during `accepted` (nice, but the edge log viewer already
   exists on the Boxes page for after it's online).

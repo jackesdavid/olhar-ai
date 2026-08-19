@@ -60,7 +60,7 @@ Drive the UI from a real per-stream state, derived from those events:
 ## Phase 3 — tie into box health (operator side)
 
   should hint "the appliance's live video isn't reachable" and link to the Boxes page, rather than
-  implying the camera is at fault. (The box already reports `tailscale_state` serving/up/offline.)
+  implying the camera is at fault. (The box already reports its health on the heartbeat.)
 
 ## Verification
 

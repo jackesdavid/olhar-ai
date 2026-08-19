@@ -35,7 +35,7 @@ native, no MSVC SDK or vcpkg. `task edge-windows-build` produces `sentinel-edge.
 
 **Still to do (this card + spilling into #83):**
   but each spawn needs `CREATE_NO_WINDOW` or a console flashes on every clip. See Phase 1.
-- **Tailscale on Windows** (Phase 2), **the service + failure-restart** and **the self-update rename
+- **the private link on Windows** (Phase 2), **the service + failure-restart** and **the self-update rename
   dance** (Phase 3–4, largely #83), and a real end-to-end run on Windows hardware (the user has a
   Windows box w/ an RTX 2060 Super to test on — GPU is irrelevant to the CPU-only edge, just the
   test machine).
@@ -78,8 +78,8 @@ Everything below assumes that. If #79 is rejected, this card gets 3× bigger and
 ## Phase 2 — the dependencies
 
   rather than asking the user to install anything.
-- **Tailscale**: the Windows installer + `tailscale.exe up --authkey …`. It runs as a service
-  already; `tailscale serve --bg 1984` works the same. Note `install.sh`'s existing lesson — treat a
+- **the private link**: the Windows installer + the VPN join step. It runs as a service
+  already; the serve step works the same. Note `install.sh`'s existing lesson — treat a
   non-zero `up` as non-fatal and always attempt `serve`.
 
 ## Phase 3 — install + service
