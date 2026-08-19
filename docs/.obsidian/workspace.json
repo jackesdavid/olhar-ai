@@ -11,10 +11,25 @@
             "id": "8518e2148d78c50b",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
-              "icon": "lucide-file",
-              "title": "New tab"
+              "type": "kanban",
+              "state": {
+                "file": "Task Board.md",
+                "kanbanViewState": {
+                  "kanban-plugin": "board",
+                  "list-collapse": [
+                    false,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    null,
+                    true
+                  ]
+                }
+              },
+              "icon": "lucide-trello",
+              "title": "Task Board"
             }
           }
         ]
