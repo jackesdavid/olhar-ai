@@ -17,7 +17,7 @@
 #     --hostname tenant-001
 #
 # The box token binds this appliance to its tenant: control returns only that tenant's cameras.
-# No tailnet (card #144) — the edge is outbound-only.
+# The edge is outbound-only (card #144).
 set -eu
 
 # ---- config (flags > env > default) ----------------------------------------
@@ -195,10 +195,10 @@ fi
 echo "▸ Installing sentinel-edge ($os-$arch) → $PREFIX"
 mkdir -p "$PREFIX" "$PREFIX/recordings" "$ENV_DIR"
 
-# ---- 1. No tailnet (card #144) ----------------------------------------------
+# ---- 1. Nothing to reach INTO the box (card #144) ---------------------------
 # The edge is outbound-only: it reaches control over HTTPS, holds one outbound SSE command stream,
-# and pushes live video out to the gateway. Nothing needs to reach INTO the box, so there is no
-# Tailscale to install or join — one fewer dependency and zero inbound surface.
+# and pushes live video out to the gateway. Nothing dials in, so there is no VPN to install or
+# join — one fewer dependency and zero inbound surface.
 
 # ---- runtime dep: GStreamer -------------------------------------------------
 # retired. Install the GStreamer runtime + plugins so the linked pipeline finds its elements (decode
@@ -335,7 +335,7 @@ else
   echo "✓ Installed. Logs:  log stream --predicate 'process == \"sentinel-edge\"'"
 fi
 
-echo "✓ sentinel-edge is up. It joined the tailnet as '$HOSTNAME_' and pulls cameras from $CONTROL_URL."
+echo "✓ sentinel-edge is up as '$HOSTNAME_' and pulls cameras from $CONTROL_URL."
 if [ "$REBOOT_REQUIRED" = 1 ]; then
   echo ""
   echo "ℹ  GStreamer was layered via rpm-ostree and activates on next boot. The edge is already"

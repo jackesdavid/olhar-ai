@@ -150,8 +150,6 @@ pub struct BoxRow {
     pub version: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    /// Edge health (reported on the heartbeat): serving | up | offline | disabled.
-    pub tailscale_state: Option<String>,
     /// Whether `gst-launch-1.0` is on PATH (card #138) — NULL until an updated edge reports it.
     pub gstreamer_ok: Option<bool>,
     pub health_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -224,7 +222,7 @@ pub async fn create_box(
 
 pub async fn list_boxes(pool: &PgPool, tenant_id: Uuid) -> sqlx::Result<Vec<BoxRow>> {
     sqlx::query_as::<_, BoxRow>(
-        "SELECT id, name, magicdns_host, version, last_seen, created_at, tailscale_state, gstreamer_ok, health_at, recording_config, platform, hwaccel, \
+        "SELECT id, name, magicdns_host, version, last_seen, created_at, gstreamer_ok, health_at, recording_config, platform, hwaccel, \
                 cpu_pct, mem_pct, disk_pct, gpu_pct, gpu_mem_pct, metrics_at \
          FROM tenant_boxes WHERE tenant_id = $1 ORDER BY name",
     )
@@ -243,13 +241,12 @@ pub async fn delete_box(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> sqlx::Resul
 }
 
 /// Resolve a presented box token (already hashed) to its tenant, stamping last_seen and
-/// (optionally) the reported tailnet host. Returns the tenant id, or None if unknown.
+/// (optionally) the reported host. Returns the tenant id, or None if unknown.
 pub async fn touch_box_by_token(
     pool: &PgPool,
     token_hash: &str,
     host: Option<&str>,
     version: Option<&str>,
-    tailscale: Option<&str>,
     gstreamer: Option<bool>,
     platform: Option<&str>,
     hwaccel: Option<&str>,
@@ -271,24 +268,24 @@ pub async fn touch_box_by_token(
             SET last_seen = now(),
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
-                tailscale_state = COALESCE($4, tailscale_state),
-                gstreamer_ok = COALESCE($5, gstreamer_ok),
-                platform = COALESCE($6, platform),
+                gstreamer_ok = COALESCE($4, gstreamer_ok),
+                platform = COALESCE($5, platform),
+                -- Health rides the config poll, which is exactly when the edge reports GStreamer;
+                -- the high-rate pushes send none of it, so NULL keeps the prior stamp.
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END,
-                cpu_pct = COALESCE($7, cpu_pct),
-                mem_pct = COALESCE($8, mem_pct),
-                disk_pct = COALESCE($9, disk_pct),
-                gpu_pct = COALESCE($10, gpu_pct),
-                gpu_mem_pct = COALESCE($11, gpu_mem_pct),
-                hwaccel = COALESCE($12, hwaccel),
-                metrics_at = CASE WHEN $7 IS NOT NULL THEN now() ELSE metrics_at END
+                cpu_pct = COALESCE($6, cpu_pct),
+                mem_pct = COALESCE($7, mem_pct),
+                disk_pct = COALESCE($8, disk_pct),
+                gpu_pct = COALESCE($9, gpu_pct),
+                gpu_mem_pct = COALESCE($10, gpu_mem_pct),
+                hwaccel = COALESCE($11, hwaccel),
+                metrics_at = CASE WHEN $6 IS NOT NULL THEN now() ELSE metrics_at END
           WHERE token_hash = $1
         RETURNING tenant_id",
     )
     .bind(token_hash)
     .bind(host)
     .bind(version)
-    .bind(tailscale)
     .bind(gstreamer)
     .bind(platform)
     .bind(cpu)
@@ -309,7 +306,6 @@ pub async fn touch_box_identity(
     token_hash: &str,
     host: Option<&str>,
     version: Option<&str>,
-    tailscale: Option<&str>,
     gstreamer: Option<bool>,
     platform: Option<&str>,
     hwaccel: Option<&str>,
@@ -319,10 +315,9 @@ pub async fn touch_box_identity(
             SET last_seen = now(),
                 magicdns_host = COALESCE($2, magicdns_host),
                 version = COALESCE($3, version),
-                tailscale_state = COALESCE($4, tailscale_state),
-                gstreamer_ok = COALESCE($5, gstreamer_ok),
-                platform = COALESCE($6, platform),
-                hwaccel = COALESCE($7, hwaccel),
+                gstreamer_ok = COALESCE($4, gstreamer_ok),
+                platform = COALESCE($5, platform),
+                hwaccel = COALESCE($6, hwaccel),
                 health_at = CASE WHEN $4 IS NOT NULL THEN now() ELSE health_at END
           WHERE token_hash = $1
         RETURNING tenant_id, id",
@@ -330,7 +325,6 @@ pub async fn touch_box_identity(
     .bind(token_hash)
     .bind(host)
     .bind(version)
-    .bind(tailscale)
     .bind(gstreamer)
     .bind(platform)
     .bind(hwaccel)
@@ -1360,7 +1354,7 @@ pub async fn provision_tenant_with_admin(
 // onto a command line — which is what makes a double-click installer possible at all.
 //
 // Nothing secret is stored: the row holds only a HASH of the code. Redeeming mints a fresh box
-// token and a fresh Tailscale key on the spot (see `domain::boxes`), so a dump of `box_pairings`
+// token on the spot (see `domain::boxes`), so a dump of `box_pairings`
 // yields nothing usable.
 
 /// Mint a pairing code for a box, superseding any unclaimed one it already has (a user who clicks
@@ -1419,7 +1413,7 @@ pub async fn rotate_box_token(pool: &PgPool, box_id: Uuid, token_hash: &str) -> 
     Ok(n > 0)
 }
 
-/// A box's display name — the Tailscale key description wants it.
+/// A box's display name.
 pub async fn box_name(pool: &PgPool, box_id: Uuid) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar("SELECT name FROM tenant_boxes WHERE id = $1")
         .bind(box_id)

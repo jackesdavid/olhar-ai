@@ -163,7 +163,7 @@ impl AppState {
 }
 
 /// Normalize a stored box host into a usable base URL with exactly one scheme. The edge may
-/// report its host with a scheme (`https://sentinel-x.ts.net`) or bare — so prepend `https://`
+/// report its host with a scheme (`https://sentinel-x.example.com`) or bare — so prepend `https://`
 /// only when absent (and keep an explicit `http://` for dev). Prevents `https://https://…`.
 fn https_base(host: &str) -> String {
     let h = host.trim().trim_end_matches('/');

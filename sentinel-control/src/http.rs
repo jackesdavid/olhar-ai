@@ -30,7 +30,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config/cameras", get(cameras))
         .route("/config/commands", get(commands))
         // Cloud→edge command transport (card #144): the edge holds this SSE stream and commands
-        // ride down it; it POSTs each command's result back. Replaces the tailnet for commanding.
+        // ride down it; it POSTs each command's result back. This is how the cloud commands a box.
         .route("/config/edge/stream", get(crate::edge_stream::edge_stream))
         .route(
             "/config/edge/command-result",
@@ -221,7 +221,7 @@ async fn installers() -> impl IntoResponse {
 //     nothing from the response, so it can't be used as an oracle to sift valid codes.
 //
 // Nothing secret is stored to make this work: redeeming MINTS a fresh box token and a fresh
-// Tailscale key here, on the spot.
+// box token here, on the spot.
 
 /// Failed redeems allowed per client, per window. Generous for a human fat-fingering a code off a
 /// screen; nowhere near enough to search a 1.1e15 space.
@@ -353,7 +353,7 @@ async fn enroll(
         .flatten()
         .unwrap_or_default();
     let hostname = format!("sentinel-{}", &box_id.to_string()[..8]);
-    // No tailnet (card #144) — enrollment issues only the box token; the edge is outbound-only.
+    // Enrollment issues only the box token; the edge is outbound-only (card #144).
     log::info!("box {box_id} ({name}) enrolled by pairing code");
     Json(json!({
         "box_id":    box_id,
@@ -443,7 +443,7 @@ async fn health(State(st): State<AppState>) -> impl IntoResponse {
 }
 
 /// Resolve a box token (Authorization: Bearer) → its tenant, stamping last_seen, the
-/// reported tailnet host (`X-Box-Host`), and the edge version (`X-Edge-Version`).
+/// reported host (`X-Box-Host`), and the edge version (`X-Edge-Version`).
 /// `Ok(None)` = no token presented; `Err(resp)` = a token was presented but invalid.
 async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::Uuid>, Response> {
     let token = headers
@@ -456,11 +456,11 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
 
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
-    let (ts, gs, plat, hw) = box_health_headers(headers);
+    let (gs, plat, hw) = box_health_headers(headers);
     let metrics = box_metrics_header(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
     match store::touch_box_by_token(
-        &st.pool, &hash, host, version, ts, gs, plat, hw, metrics,
+        &st.pool, &hash, host, version, gs, plat, hw, metrics,
     )
     .await
     {
@@ -473,27 +473,17 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
     }
 }
 
-/// Extract the edge health headers (`X-Edge-Tailscale`, `X-Edge-Gstreamer`, `X-Edge-Platform`,
-/// `X-Edge-Hwaccel`) — present only on the box's regular config poll, absent on the high-rate
-/// pushes (then `None` keeps the prior value via COALESCE).
-fn box_health_headers(
-    headers: &HeaderMap,
-) -> (
-    Option<&str>,
-    Option<bool>,
-    Option<&str>,
-    Option<&str>,
-) {
-    let ts = headers
-        .get("x-edge-tailscale")
-        .and_then(|v| v.to_str().ok());
+/// Extract the edge health headers (`X-Edge-Gstreamer`, `X-Edge-Platform`, `X-Edge-Hwaccel`) —
+/// present only on the box's regular config poll, absent on the high-rate pushes (then `None`
+/// keeps the prior value via COALESCE).
+fn box_health_headers(headers: &HeaderMap) -> (Option<bool>, Option<&str>, Option<&str>) {
     let gs = headers
         .get("x-edge-gstreamer")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim() == "1");
     let plat = headers.get("x-edge-platform").and_then(|v| v.to_str().ok());
     let hw = headers.get("x-edge-hwaccel").and_then(|v| v.to_str().ok());
-    (ts, gs, plat, hw)
+    (gs, plat, hw)
 }
 
 /// Parse the `X-Edge-Metrics` heartbeat header (compact JSON: cpu/mem/disk/gpu percents).
@@ -606,9 +596,9 @@ pub(crate) async fn box_identity(
     let Some(tok) = token else { return Ok(None) };
     let host = headers.get("x-box-host").and_then(|v| v.to_str().ok());
     let version = headers.get("x-edge-version").and_then(|v| v.to_str().ok());
-    let (ts, gs, plat, hw) = box_health_headers(headers);
+    let (gs, plat, hw) = box_health_headers(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_identity(&st.pool, &hash, host, version, ts, gs, plat, hw).await {
+    match store::touch_box_identity(&st.pool, &hash, host, version, gs, plat, hw).await {
         Ok(Some(pair)) => Ok(Some(pair)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {

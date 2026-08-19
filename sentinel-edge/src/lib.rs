@@ -171,7 +171,7 @@ pub fn run() {
     signer::init();
     signer::bootstrap(&AppState::control_url());
 
-    // An appliance binds all interfaces (the gateway/control reach it over the LAN/tailnet); an
+    // An appliance binds all interfaces (the gateway/control reach it over the LAN); an
     // embedded edge on a phone only ever serves the app on the same device, and iOS is happiest with
     // an explicit localhost bind — so default per platform (card #144). `EDGE_BIND` still overrides.
     let bind = std::env::var("EDGE_BIND").unwrap_or_else(|_| default_bind());
@@ -228,7 +228,7 @@ pub fn run() {
 
     // Media path: the in-process linked GStreamer decoder + outbound live dial (cards #138 + #144).
     // its cameras over the LAN directly. There is no longer an alternative to fall back to.
-    log::info!("media: in-process GStreamer (the only media path); no tailnet");
+    log::info!("media: in-process GStreamer (the only media path)");
     // Report the initially-resolved stream set so the Devices dot is correct from boot.
     state.push_streaming();
     // recordings start instantly without a cold-start delay.
@@ -381,7 +381,7 @@ pub fn run() {
     }
 
     // Cloud→edge command stream (card #144): hold one outbound SSE to control so the cloud can
-    // command this box (record, …) WITHOUT reaching it inbound — the tailnet replacement. Commands
+    // command this box (record, …) WITHOUT reaching it inbound. Commands
     // dispatch to the edge's own local HTTP API, so the cloud path reuses the exact local flow.
     {
         let control_url = state.control_url.clone();

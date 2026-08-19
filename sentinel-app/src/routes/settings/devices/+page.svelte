@@ -417,7 +417,7 @@
   }
 
   // Offer "Save without testing" ONLY when the test couldn't reach any edge at all (verdict is null —
-  // the probe infra failed, e.g. no box online over the tailnet, or the only edge is on-device and
+  // the probe infra failed, e.g. no box online, or the only edge is on-device and
   // localhost-bound). NOT when the camera itself answered and rejected the creds (auth_failed/locked)
   // — bypassing those would hand a bad password to the edge and risk the very auth-lockout the
   // doesn't apply to it; it just collects the creds on its next direct poll.

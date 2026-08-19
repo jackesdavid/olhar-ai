@@ -1,5 +1,5 @@
 //! The cloud→edge **SSE command stream** (card #144) — control's side of the outbound transport
-//! that replaces the tailnet for commanding an edge.
+//! how the cloud commands an edge.
 //!
 //! An edge opens one long-lived `GET /config/edge/stream` (box token). This module holds the
 //! per-pod registry of those live streams (`box_id → sender`), pushes queued commands down the

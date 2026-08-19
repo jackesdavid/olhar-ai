@@ -154,6 +154,10 @@ kanban-plugin: board
 
 ## Validation
 
+- [ ] #199 Tailnet/Tailscale removed from the code, not just the architecture
+	  - Plan: [[retire-the-tailnet-from-code]]
+	  - Uncovered a live bug: health_at was gated on the dead X-Edge-Tailscale header,
+	    so box health timestamps had silently frozen. Re-gated on the GStreamer flag.
 - [ ] #195 Capture-from-camera always failed — enroll and recognize called a stub
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]

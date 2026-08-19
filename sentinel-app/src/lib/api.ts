@@ -101,7 +101,6 @@ export type Box = {
   last_seen: string | null;
   created_at: string;
   /** Edge health (reported on the heartbeat): serving | up | offline | disabled. */
-  tailscale_state: string | null;
   /** Whether gst-launch-1.0 is on PATH (card #138) — null until an updated edge reports it. */
   gstreamer_ok: boolean | null;
   health_at: string | null;

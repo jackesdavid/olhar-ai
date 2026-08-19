@@ -106,7 +106,7 @@ struct PairingResp {
 }
 
 /// Mint a pairing code for a box. The code is the ONLY thing the person at the appliance needs —
-/// it redeems (once, at `POST /enroll`) into a freshly-minted box token + Tailscale key.
+/// it redeems (once, at `POST /enroll`) into a freshly-minted box token.
 async fn pairing_code(
     UserClaims(c): UserClaims,
     State(st): State<AppState>,
@@ -202,7 +202,7 @@ async fn create(
         .await
         .map_err(db_err)?;
     let hostname = format!("sentinel-{}", &id.to_string()[..8]);
-    // No tailnet (card #144) — the edge is outbound-only, so there's no auth key to mint.
+    // The edge is outbound-only (card #144), so there's no VPN auth key to mint.
     Ok(Json(CreateResp {
         id,
         token,
@@ -229,8 +229,8 @@ struct SelfRegisterResp {
 
 /// Register the phone as a **light-edge box** (card #142). Unlike an appliance — which has no user
 /// session and so must be paired by a code typed into its local page (`#81`, `POST /enroll`) — the
-/// phone IS the authenticated app, so it self-registers in one call. No Tailscale key (the phone
-/// never joins the tailnet) and no `devices` row (that table is full-replaced by the appliance's
+/// phone IS the authenticated app, so it self-registers in one call. No `devices` row (that
+/// table is full-replaced by the appliance's
 /// camera sync, which would clobber a phone camera — the phone is identified purely by the
 /// `camera_ip` string it stamps on its face events).
 async fn self_register(
@@ -376,8 +376,9 @@ struct LiveStartReq {
 
 #[derive(Serialize)]
 struct LiveStartResp {
-    /// `"sse"` — the edge was told to dial the gateway (outbound; no tailnet needed).
-    /// `"tailnet"` — no SSE box; the gateway should dial `host` itself, as before.
+    /// `"sse"` — the edge was told to dial the gateway (outbound).
+    /// `"direct"` — no SSE box; the gateway should dial `host` itself. Only a directly reachable
+    /// edge answers that: a LAN box in dev. A deployed edge is outbound-only (card #144).
     mode: String,
     host: Option<String>,
 }
@@ -407,8 +408,8 @@ fn callback_allowed(callback: &str, base: &str) -> bool {
 
 /// The gateway calls this (forwarding the user's JWT) to set up a live stream. If the tenant has a
 /// box on the SSE command stream, we tell that box to dial the gateway back (`start_live`) — live
-/// over the edge's OUTBOUND connection, card #144, so it works with no tailnet. Otherwise we return
-/// the tailnet host and the gateway dials the edge itself, exactly as before.
+/// over the edge's OUTBOUND connection (card #144). Otherwise we return the box's host and the
+/// gateway dials the edge itself, which reaches it only where it is directly addressable.
 ///
 /// Guarded on `live.view`: this causes live video to flow, and `live.view` is the one action the
 /// master bypass never grants (`auth::LIVE_VIEW`). Without the guard a Viewer — who by definition
@@ -443,7 +444,7 @@ async fn live_start(
         .await
         .map_err(db_err)?;
     Ok(Json(LiveStartResp {
-        mode: "tailnet".into(),
+        mode: "direct".into(),
         host,
     }))
 }

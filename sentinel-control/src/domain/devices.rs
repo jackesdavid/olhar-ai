@@ -147,8 +147,8 @@ async fn probe(
     let creds = serde_json::json!({ "username": b.username, "password": b.password });
 
     // Prefer the SSE command channel (card #144) — it works for an outbound-only box with no
-    // tailnet, which is exactly why the Devices "Test" used to fail on those. Fall back to the
-    // legacy tailnet POST for a box that isn't on SSE.
+    // reachable inbound, which is exactly why the Devices "Test" used to fail on those. Fall back
+    // to the legacy direct POST for a box that isn't on SSE.
     let (status, body): (u16, Vec<u8>) = if let Some(res) =
         app_core::edge_commands::edge_http_via_sse(
             &st.pool,
@@ -292,7 +292,7 @@ async fn snapshot(
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
 
-    // SSE command channel first (card #144 — outbound-only boxes); tailnet fallback below.
+    // SSE command channel first (card #144 — outbound-only boxes); direct fallback below.
     let path = format!("/snapshot/{}", urlencoding::encode(&ip));
     if let Some(res) =
         app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 20).await
@@ -376,7 +376,7 @@ async fn tracks(
     auth::require(&c, "devices.read")?;
     let tid = tenant_of(&c)?;
 
-    // SSE command channel first (card #144); tailnet fallback below.
+    // SSE command channel first (card #144); direct fallback below.
     let path = format!("/tracks/{}", urlencoding::encode(&ip));
     if let Some(res) =
         app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 15).await

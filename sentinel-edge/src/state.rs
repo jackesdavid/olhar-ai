@@ -484,7 +484,7 @@ impl AppState {
         }
     }
 
-    /// A short-timeout ureq agent + request stamped with this box's token + tailnet host +
+    /// A short-timeout ureq agent + request stamped with this box's token + host +
     /// edge version — the standard headers control uses to resolve the box's tenant.
     fn box_agent(&self) -> BoxReq {
         BoxReq {
@@ -695,7 +695,7 @@ fn linux_distro() -> Option<String> {
 }
 
 /// Stamp the box's health (GStreamer presence + hwaccel + platform) onto a request so control can
-/// surface it on the Boxes page. Used on the ~25s config poll (not the pushes). No more Tailscale or
+/// surface it on the Boxes page. Used on the ~25s config poll (not the pushes).
 fn with_health(req: ureq::Request) -> ureq::Request {
     req.set("X-Edge-Gstreamer", if gstreamer_ok() { "1" } else { "0" })
         .set("X-Edge-Platform", platform())
@@ -876,7 +876,7 @@ fn resolve_rtsp(devices: &mut [Device]) {
 
 /// GET `{control_url}/config/cameras` → the camera list, scoped to this box's tenant.
 /// Presents `BOX_TOKEN` (set by the installer, or by enrollment — see `crate::enroll`) as a bearer
-/// so control returns only this tenant's cameras, and reports `EDGE_PUBLIC_HOST` (this box's tailnet
+/// so control returns only this tenant's cameras, and reports `EDGE_PUBLIC_HOST` (this box's own
 /// URL) so the gateway can resolve the tenant's live upstream.
 ///
 /// **Without a token, control answers 401** — it does not fall back to any tenant. (It used to, and

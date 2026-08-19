@@ -276,7 +276,7 @@ pub fn record_camera(url: &str, secs: u64, out: &std::path::Path) -> Result<(u64
 /// Record a camera and upload the clip to R2 via control (card #144) — reuses the same cloud path an
 /// appliance uses: POST the manifest to control (box token) → get a presigned PUT → send the bytes
 /// straight to R2 (no video crosses the VPS) → confirm. The phone edge is unenrolled, so the box
-/// token is passed in (the app holds it from self-register, #143). No tailnet: all outbound HTTPS.
+/// token is passed in (the app holds it from self-register, #143). All outbound HTTPS.
 pub fn record_and_upload(
     url: &str,
     secs: u64,

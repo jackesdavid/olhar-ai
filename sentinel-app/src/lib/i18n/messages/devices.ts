@@ -99,9 +99,9 @@ export const devices = {
     saving: "Saving…",
     saveWithoutTesting: "Save without testing",
     saveWithoutTestingTitle:
-      "Send these credentials to the box without a live camera test — for a box that can't be probed (e.g. an on-device edge with no tailnet).",
+      "Send these credentials to the box without a live camera test — for a box that can't be reached for a probe, such as an edge running on a phone.",
     untestedHint:
-      "Couldn't reach a box to test these credentials — no edge is online over the tailnet. If you're provisioning an on-device edge (it polls directly, not over the tailnet), you can save the credentials without testing and it'll collect them on its next poll.",
+      "Couldn't reach a box to test these credentials — no edge is online. If you're setting up an edge that checks in on its own schedule, you can save the credentials without testing and it'll pick them up on its next check-in.",
     // probe verdicts
     vOk: "Camera verified — the credentials work.",
     vAuthFailed: "The camera rejected these credentials.",
@@ -266,9 +266,9 @@ export const devices = {
     saving: "Salvando…",
     saveWithoutTesting: "Salvar sem testar",
     saveWithoutTestingTitle:
-      "Enviar estas credenciais ao appliance sem um teste ao vivo na câmera — para um appliance que não pode ser sondado (por exemplo, um edge no próprio dispositivo, sem tailnet).",
+      "Enviar estas credenciais ao appliance sem um teste ao vivo na câmera — para um appliance que não pode ser sondado, como um edge rodando em um celular.",
     untestedHint:
-      "Não foi possível alcançar um appliance para testar estas credenciais — nenhum edge está online pela tailnet. Se você está provisionando um edge no próprio dispositivo (que consulta direto, não pela tailnet), pode salvar as credenciais sem testar e ele as pegará na próxima consulta.",
+      "Não foi possível alcançar um appliance para testar estas credenciais — nenhum edge está online. Se você está configurando um edge que se reporta no próprio ritmo, pode salvar as credenciais sem testar e ele as pegará na próxima consulta.",
     // probe verdicts
     vOk: "Câmera verificada — as credenciais funcionam.",
     vAuthFailed: "A câmera rejeitou estas credenciais.",

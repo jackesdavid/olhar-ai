@@ -9,7 +9,7 @@ This file is the index. Detailed knowledge lives in focused references — read 
 matches your task:
 
 - **[Architecture & services](docs/ref/architecture.md)** — the services, ports, data flow,
-  multi-tenancy, and the tailnet (how the cloud reaches LAN cameras).
+  multi-tenancy, and how the cloud reaches LAN cameras (the edge's outbound SSE channel).
 - **[Deploy & ops](docs/ref/deploy.md)** — how to ship: local build → GHCR → VPS (`task
   cloud-deploy`), the GitHub Actions billing block, the VPS, migrations, versioning, and how
   the edge installer + binary are served.
@@ -122,7 +122,8 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
   backend flag. `sentinel-edge/src/capture.rs` holds the ONE-PIPELINE-per-camera invariant: a
   consumer camera caps concurrent RTSP sessions at 2–4, so a second connection is how a working
   camera goes dark. Everything else hangs off `tee` branches.
-- **The edge is outbound-only** (card #144). No tailnet. Cloud→edge calls go over the SSE command
+- **The edge is outbound-only** (card #144). No VPN, no tailnet — retired in full, code included
+  (#199). Cloud→edge calls go over the SSE command
   channel (`app_core::edge_commands::edge_http_via_sse{,_blocking}`) — frames, probes, recordings,
   tracks. A direct HTTP call to a box from a cloud service reaches nothing.
 - **No Claude attribution** in commits/PRs (no `Co-Authored-By: Claude`, no "Generated with").

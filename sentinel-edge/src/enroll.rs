@@ -67,7 +67,7 @@ pub async fn enroll(State(control_url): State<String>, Json(req): Json<EnrollReq
 
     match result {
         Ok(Ok(())) => {
-            // Restart so the whole boot path runs with an identity: pull cameras, join the tailnet,
+            // Restart so the whole boot path runs with an identity: pull cameras,
             // start the hub. We exit and let the service supervisor bring us back — the same
             // contract the Boxes-page Restart button relies on.
             //
@@ -131,24 +131,9 @@ fn redeem(control_url: &str, code: &str) -> Result<(), String> {
     if token.is_empty() {
         return Err("control didn't issue a token".to_string());
     }
-    let hostname = body
-        .get("hostname")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let ts_key = body
-        .get("tailscale_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
     // CONTROL_URL is written too: it isn't a secret (it's a public hostname), but the box must
     // remember which control plane it belongs to across restarts.
-    let mut updates: Vec<(&str, &str)> = vec![("CONTROL_URL", control_url), ("BOX_TOKEN", token)];
-    if !hostname.is_empty() {
-        updates.push(("TS_HOSTNAME", hostname));
-    }
-    if !ts_key.is_empty() {
-        updates.push(("TS_AUTHKEY", ts_key));
-    }
+    let updates: Vec<(&str, &str)> = vec![("CONTROL_URL", control_url), ("BOX_TOKEN", token)];
     crate::envfile::merge_write(&updates)
         .map_err(|e| format!("couldn't save the box's identity: {e}"))?;
     Ok(())

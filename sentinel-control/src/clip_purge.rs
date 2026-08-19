@@ -166,7 +166,7 @@ async fn delete_from_cloud(_pool: PgPool, job: Job) -> Result<bool, String> {
 /// Delete the local file from the tenant's edge box. Knows only the edge.
 /// Idempotent: a 404 from the edge means it's already gone.
 ///
-/// SSE first (card #144), tailnet second — the same order as the Devices probe. Without the SSE leg
+/// SSE first (card #144), direct second — the same order as the Devices probe. Without the SSE leg
 /// this job did something worse than fail: `box_host_for_tenant` is NULL for every outbound-only
 /// box, so it took the "no box connected — nothing to delete here" branch and reported SUCCESS
 /// while the file stayed on the appliance forever. A delete that frees no space and says it worked
@@ -193,7 +193,7 @@ async fn delete_from_edge(pool: PgPool, job: Job) -> Result<bool, String> {
         .await
         .map_err(|e| e.to_string())?
     else {
-        return Ok(true); // no box on SSE and none on the tailnet — nothing reachable to delete
+        return Ok(true); // no box on SSE and none reachable directly — nothing to delete
     };
     let base = edge_api_base(&normalize_host(&host));
     let url = format!("{base}{path}");
