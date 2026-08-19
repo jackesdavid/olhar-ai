@@ -1,4 +1,8 @@
-# Recipients, in tabs — Onboarding · Telegram · Apps
+# Recipients, in tabs — Telegram · Phones
+
+> **NARROWED by #198 ([[one-name-one-place]]).** The Onboarding tab is gone: enrollment belongs
+> in Integrations, which is already what shipped for Telegram in #191. Two tabs remain, and the
+> naming is settled there — "Phones", not "Apps".
 
 **Board card:** #189 Organise the Recipients screen into tabs
 **Goal:** One screen that answers one question at a time: *how do I add someone*, *who is on
