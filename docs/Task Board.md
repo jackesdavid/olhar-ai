@@ -22,7 +22,6 @@ kanban-plugin: board
 
 ## Bugs
 
-- [ ] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
@@ -172,6 +171,10 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
+	  - The test endpoint picks the permission from its PAYLOAD: code+value writes and needs
+	    tuya.control; without them it only reads. Admins keep working via the boot seed; a
+	    custom role holding tuya.write loses command-sending, which is the point.
 - [x] #191 Integrations screen in tabs + a testable Tuya device console
 	  - Plan: [[integrations-tabs-tuya-console]]
 	  - VALIDATED in production by the owner on the Garen gate board. Needed no backend:

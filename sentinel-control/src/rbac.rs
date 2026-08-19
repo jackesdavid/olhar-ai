@@ -28,13 +28,17 @@ pub const PERMISSIONS: &[(&str, &str)] = &[
     ("billing.read", "View billing, plan, and invoices"),
     ("billing.write", "Subscribe to a plan and manage payment"),
     ("tuya.read", "View and sync Tuya smart-home devices"),
-    // Since #191 this also SENDS commands: the Integrations console writes a data point
-    // straight to the device. On this account that means opening a gate from a browser, so the
-    // description has to say so — a permission whose blurb understates it is how someone grants
-    // "edit labels" and hands over the front door. A separate `tuya.control` is card #192.
+    ("tuya.write", "Link a Tuya account and edit device labels"),
+    // Card #192. Sending a command is not configuration: on this account it opens a gate. Keeping
+    // it inside `tuya.write` meant granting someone "edit device labels" also handed them the
+    // front door — a permission whose name understates what it does is a security bug even while
+    // every check passes. Splitting it costs one entry here, because `seed.rs` upserts the catalog
+    // on boot and grants every action to each tenant's Admin role: Admins keep working with no
+    // migration. A CUSTOM role that was given `tuya.write` loses command-sending, which is the
+    // entire point — that grant was never meant to include opening doors.
     (
-        "tuya.write",
-        "Link a Tuya account, edit device labels, and send commands to devices",
+        "tuya.control",
+        "Send commands to smart-home devices (open a gate, switch a relay)",
     ),
     ("assistant.use", "Use the AI assistant (chat, voice)"),
 ];
