@@ -15,8 +15,8 @@ replicas** each; datastores (postgres/redis/minio) stay single.
 |---|---|
 | `__DB_PASS__` | Postgres password (matches `POSTGRES_PASSWORD`) — pick a strong one |
 | `__ACME_EMAIL__` | email for Let's Encrypt registration |
-| `__EDGE_HOST__` | the fallback edge's MagicDNS host (tailnet) — same idea as the old stack |
-| `__EDGE_TS_IP__` | that edge's Tailscale IP (for the `extra_hosts` entry) |
+| `__EDGE_HOST__` | the fallback edge's hostname — same idea as the old stack |
+| `__EDGE_TS_IP__` | that edge's IP (for the `extra_hosts` entry) |
 
 And `./sentinel.env` — copy from `sentinel.env.example`, fill, **do not commit**.
 

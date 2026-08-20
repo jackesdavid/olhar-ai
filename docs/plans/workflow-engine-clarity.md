@@ -38,7 +38,7 @@ the list, and the fix is a log line the run viewer can show:
 That sentence is the whole afternoon, in one line, at the moment it happens.
 
 ### 2. Comments that contradict the code (fix or delete — these are worse than none)
-- `tailscale.rs` `reassert()` claimed a box "heals ITSELF within minutes… what makes the live path
+- the key-minting module (removed in #199) `reassert()` claimed a box "heals ITSELF within minutes… what makes the live path
   self-recover for a real customer". It never re-ran `up`; a stopped daemon stranded the box forever.
   Fixed in #92, but **the comment is why nobody looked there** — audit the file for the same.
 - `#86`'s plan concluded **"No migration"** in bold. Right about `work_jobs`, wrong about the CHECK

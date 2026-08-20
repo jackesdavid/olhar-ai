@@ -45,7 +45,7 @@ pub fn load() {
 }
 
 /// Merge `updates` into the file, preserving every other line's key, then write it back with
-/// owner-only permissions — it holds the box token and the Tailscale key.
+/// owner-only permissions — it holds the box token.
 pub fn merge_write(updates: &[(&str, &str)]) -> std::io::Result<()> {
     let p = path();
     if let Some(dir) = p.parent() {

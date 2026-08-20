@@ -113,7 +113,7 @@ pub struct EdgeFrameSource {
     base: String,
     agent: ureq::Agent,
     /// The SSE route to the box: `(db, tenant)`. The edge is OUTBOUND-ONLY since card #144 — there
-    /// is no tailnet and `magicdns_host` is NULL — so a direct HTTP call to `base` can only reach
+    /// `magicdns_host` is NULL for an outbound-only box — so a direct HTTP call to `base` can only reach
     /// something on the CLOUD host, which is never the edge. Every other edge caller (the probe,
     /// recordings, the tracks node) was moved to the SSE channel; this one was missed, and asked
     /// 127.0.0.1 for a frame that lives on a box across the internet.
@@ -158,7 +158,7 @@ impl EdgeFrameSource {
     }
 }
 /// Bases whose edge API (`:8080/snapshot`) we've already found unreachable — so a box without the
-/// tailnet serve (older edge) pays the probe timeout **once per process**, not on every frame grab.
+/// direct serve (older edge) pays the probe timeout **once per process**, not on every frame grab.
 fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
     static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
         std::sync::OnceLock::new();
@@ -172,7 +172,7 @@ fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashMap<String
 const DEAD_FOR: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl EdgeFrameSource {
-    /// The edge's OWN API base. A tailnet base `https://host` maps to `https://host:8080`, where
+    /// The edge's OWN API base. An https base `https://host` maps to `https://host:8080`, where
     /// the edge publishes its HTTP (8788).
     ///
     /// port, and the sidecar is gone. It stays only so a caller still holding an old base does not
@@ -443,23 +443,23 @@ impl Notifier for RemoteNotifier {
 mod edge_api_base_tests {
     use super::EdgeFrameSource;
 
-    /// (`tailscale serve --https=8080 8788`).
+    /// A bare https base maps to the edge's own API port.
     #[test]
-    fn tailnet_https_base_maps_to_8080() {
-        let s = EdgeFrameSource::new("https://box-abc.tail1234.ts.net");
+    fn https_base_maps_to_8080() {
+        let s = EdgeFrameSource::new("https://box-abc.example.com");
         assert_eq!(
             s.edge_api_base().as_deref(),
-            Some("https://box-abc.tail1234.ts.net:8080")
+            Some("https://box-abc.example.com:8080")
         );
     }
 
     /// A trailing slash must not produce a double slash in the derived URL.
     #[test]
     fn trailing_slash_is_trimmed() {
-        let s = EdgeFrameSource::new("https://box.ts.net/");
+        let s = EdgeFrameSource::new("https://box.example.com/");
         assert_eq!(
             s.edge_api_base().as_deref(),
-            Some("https://box.ts.net:8080")
+            Some("https://box.example.com:8080")
         );
     }
 
@@ -473,7 +473,7 @@ mod edge_api_base_tests {
     /// An https base that already carries an explicit port isn't a shape we can map — better to
     #[test]
     fn explicit_https_port_declines() {
-        let s = EdgeFrameSource::new("https://box.ts.net:9443");
+        let s = EdgeFrameSource::new("https://box.example.com:9443");
         assert_eq!(s.edge_api_base(), None);
     }
 }

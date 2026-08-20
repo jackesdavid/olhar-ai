@@ -7,7 +7,7 @@
 ## Overview
 
 ingesting RTSP cameras). A central **Axum gateway** bridges public end-users to the
-private edge boxes over a **Tailscale** tailnet. A web app lets each client’s users
+private edge boxes over a **the private link** private link. A web app lets each client’s users
 view only their own streams.
 
 ## Topology
@@ -15,7 +15,7 @@ view only their own streams.
 ```
 ```
 
-- **Private tailnet:** only the central gateway + client edge boxes. One device (tagged resource) per client.
+- **Private private link:** only the central gateway + client edge boxes. One device (tagged resource) per client.
 - **Public app layer:** end-user browsers/apps ↔ gateway over HTTPS/WSS, authenticated by JWT.
 - End-user devices **never** join the VPN. The gateway is the only bridge between the two layers.
 
@@ -32,30 +32,30 @@ view only their own streams.
 - Ship this first. Instrument concurrent-viewers-per-camera and per-site upstream bandwidth.
 - Add gateway multiplexing **only** if a camera draws many simultaneous viewers **or** client uplink is constrained (multiplexing requires MSE init-segment caching — avoid until measured need).
 
-### Connectivity — Tailscale
-- Tailnet members: central gateway + edge boxes only.
+### Connectivity — the private link
+- Private-link members: central gateway + edge boxes only.
 - **Persistent tagged nodes** (not ephemeral — boxes are 24/7).
 - **Per-tenant tag** `tag:tenant-<id>` for identification + defense-in-depth. Isolation is trivial: edges only ever talk to the gateway, never each other.
 - **Enrollment via broker pattern:**
-  1. OAuth client on the tailnet (scope `auth_keys` + tags). Secret stays on the central backend only.
+  1. OAuth client on the private link (scope `auth_keys` + tags). Secret stays on the central backend only.
   2. Edge authenticates to the central backend → backend mints a short-lived auth key → returns it.
-  3. Edge runs `tailscale up` with that key.
-- **Offboarding:** backend deletes the node via the Tailscale API (frees the hostname, cleans the tagged-resource count).
+  3. Edge runs the VPN join with that key.
+- **Offboarding:** backend deletes the node via the the private link API (frees the hostname, cleans the tagged-resource count).
 
 ### Addressing — MagicDNS
 - Set hostname **at enrollment** → deterministic name, known before the box connects (no lookup).
-- Store `tenant-<id>.<tailnet>.ts.net` in `tenant_boxes.magicdns_host`.
+- Store `tenant-<id>.<private link>.ts.net` in `tenant_boxes.magicdns_host`.
 - Rules: DNS-safe slug (lowercase, alphanumeric + hyphens, no underscores, ≤63 chars); unique per box; **delete-then-replace** on swap to keep the name stable.
-- Tailnet DNS settings: enable **MagicDNS** + **HTTPS certificates** (the `serve` cert is issued for the MagicDNS name).
+- Private-link DNS: enable name resolution + HTTPS certificates for the box's name.
 
 ```yaml
 api:
   listen: "127.0.0.1:1984"   # localhost only — never LAN/public
 ```
 ```bash
-# enroll + expose over tailnet (TLS via MagicDNS)
-tailscale up --auth-key=<brokered> --advertise-tags=tag:tenant-123 --hostname=tenant-123
-tailscale serve --bg 1984
+# enroll + expose over private link (TLS via MagicDNS)
+the private link up --auth-key=<brokered> --advertise-tags=tag:tenant-123 --hostname=tenant-123
+the private link serve --bg 1984
 ```
 
 ### Gateway — Axum
@@ -101,38 +101,38 @@ async fn stream_http(
 - Enforced at the gateway: the upstream address comes **only** from the validated JWT → registry lookup, never from the client. A tenant cannot address another tenant’s box.
 
 ### Failure handling
-- `online` flag → clean 503 instead of hanging on a dead tailnet dial.
+- `online` flag → clean 503 instead of hanging on a dead private link dial.
 - Connect timeouts on both the reqwest client and the WS connect to prevent stuck-connection pileup.
 
-### Cost — Tailscale
+### Cost — the private link
 - Billed per user-seat; **user devices free/unlimited**; **tagged resources free up to 50/month**, overage beyond.
 - Each client = 1 tagged resource → **~$0 marginal cost up to ~50 clients**; seats are just your own team.
-- **~50 clients** = the crossover to evaluate self-hosting **Headscale** (free control plane, you operate it). Below that, managed Tailscale.
+- **~50 clients** = the crossover to evaluate self-hosting **Headscale** (free control plane, you operate it). Below that, managed the private link.
 
 ---
 
 ## How this fits the existing decomposition
 
-  enrolls into the tailnet via the broker, runs `tailscale serve 1984`, heartbeats the
+  enrolls into the private link via the broker, runs `the private link serve 1984`, heartbeats the
   gateway. Also keeps the **local** snapshot REST (`GET /snapshot/<ip>`) that
   `sentinel-flow`'s `FrameSource` uses on the LAN. It is a full on-prem Sentinel install
   (local Postgres: devices/persons/workflows + sentinel-flow + this edge gateway).
 - **sentinel-gateway** (new, cloud): multi-tenant Axum bridge with its OWN central
   Postgres (`tenants`, `tenant_boxes`, auth). JWT in → `resolve_upstream` → proxy
-  MSE-WS + HTTP(snapshots/HLS) to the tenant's box over the tailnet. Hosts the
-  enrollment broker (mint short-lived Tailscale auth keys) + heartbeat receiver.
+  MSE-WS + HTTP(snapshots/HLS) to the tenant's box over the private link. Hosts the
+  enrollment broker (mint short-lived the private link auth keys) + heartbeat receiver.
 - Two databases by design: edge-local (device/flow state) vs gateway-central
   (tenant/box/auth registry).
 
 ## Build order (proposed)
 
 1. **Scaffold both Axum services** compiling + runnable locally, integration points
-   (Tailscale enrollment, JWT verification) behind config/seams with dev defaults
+   (the private link enrollment, JWT verification) behind config/seams with dev defaults
    (edge↔gateway over a configured URL; a dev JWT verifier). Core proxy logic real:
    `tenant_boxes` registry, `resolve_upstream`, `stream_http` passthrough, `bridge_ws`,
    heartbeat.
 2. **Real JWT** verification (issuer/JWKS or shared secret) + the `Claims` extractor.
-3. **Real Tailscale**: broker endpoint (OAuth client → short-lived auth key), MagicDNS
-   hostname assignment, edge `tailscale up` + `serve`, offboarding via the API.
+3. **Real the private link**: broker endpoint (OAuth client → short-lived auth key), MagicDNS
+   hostname assignment, edge the VPN join + `serve`, offboarding via the API.
 4. **Frontend**: MSE player (WS) pointed at the gateway; per-tenant stream list.
 5. Instrument viewers/bandwidth; revisit multiplexing + Headscale at ~50 clients.

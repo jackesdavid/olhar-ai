@@ -65,12 +65,12 @@ No new backend work needed if Phase 1 is done; this is integration + testing.
 
 ## Phase 3 — RTX 2060 GPU sidecar upgrade
 
-Move inference from CPU-on-VPS to the LAN RTX 2060 box over the tailnet.
+Move inference from CPU-on-VPS to the LAN RTX 2060 box over the private link.
 
 **Steps:**
-1. On the RTX 2060 Linux box: install NVIDIA drivers, `nvidia-container-toolkit`, Docker, Tailscale (join the tailnet)
+1. On the RTX 2060 Linux box: install NVIDIA drivers, `nvidia-container-toolkit`, Docker, the private link (join the private link)
 2. Run `docker compose -f ai/sidecar/compose.gpu.yml up -d` — confirm `face_detect_embed` responds on port 8000
-3. In the VPS `/ibbf` compose, update `AI_SERVICE_URL` in `sentinel.env` to `http://<box-tailnet-ip>:8000/runsync`
+3. In the VPS `/ibbf` compose, update `AI_SERVICE_URL` in `sentinel.env` to `http://<box-private link-ip>:8000/runsync`
 4. Add `extra_hosts` entry for the box in the sentinel-control service block (same pattern as the gateway → edge)
 5. Keep the VPS CPU sidecar as a hot standby (consider `AI_SERVICE_FALLBACK_URL` env var in `ai_service.rs`)
 6. Measure latency improvement (expect 10–30× speedup for face ops vs CPU)

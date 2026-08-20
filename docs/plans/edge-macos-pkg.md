@@ -17,7 +17,7 @@ Everything except the signature is **built, committed, and validated end-to-end 
   codesigned (malformed Mach-O → unnotarizable), and `--disable-gpl` gives LGPL certainty +
   `--disable-autodetect` keeps it free of the build host's Homebrew dylibs. See Open decisions #3.
   ones were killed by Gatekeeper), the unenrolled edge serves the pairing page, a code redeems into
-  a real box token + Tailscale key written to `edge.env`, and the re-launched edge pulls the
+  a real box token + edge auth key written to `edge.env`, and the re-launched edge pulls the
   tenant's cameras and reports online.
 
 **Last mile — signing. The signing path is wired** (`task edge-pkg-signed` expects `MACOS_APP_CERT`,
@@ -105,7 +105,7 @@ a CI runner (GitHub Actions is billing-blocked anyway — see [deploy ref](../re
 ## Verification
 
 - On a **clean** Mac (a fresh VM, no Homebrew, no Xcode): download → double-click → installs →
-  browser opens the enrollment page → paste code → the box appears in the Boxes page with tailnet
+  browser opens the enrollment page → paste code → the box appears in the Boxes page with private link
 - Reboot the Mac → the daemon comes back by itself.
 - `spctl -a -vvv -t install Sentinel-Edge-*.pkg` → "accepted, source=Notarized Developer ID".
 - Install over an existing install (the upgrade path) → no `Load failed: 5`, config preserved.

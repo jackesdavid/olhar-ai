@@ -48,7 +48,7 @@ info*. For a security product being sold to a business, that is a conversion kil
 ## Verification
 
 - Clean Windows 11 VM, no dev tools: download → run → install → browser opens the enrollment page →
-  paste the code → the box appears in Boxes with the right platform badge, tailnet `serving`,
+  paste the code → the box appears in Boxes with the right platform badge, private link `serving`,
 - Reboot → the service comes back on its own. Boxes-page Restart → it comes back.
 - ONVIF discovery finds a LAN camera; Live plays; motion + tracking events reach the cloud.
 - SmartScreen shows no warning on a machine that has never seen the binary.

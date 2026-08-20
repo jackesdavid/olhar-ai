@@ -107,7 +107,8 @@ the schema has opinions about it.
 **Build times** (57.9 → 20.0 min) and the **update path** (platform-aware, forward-only,
 manifest-driven) were fixed today and need no further work.
 
-**The tailnet** is already gone in behaviour — no box has an address — but `magicdns_host` and
-`tailscale_state` remain as columns with four live readers. Removing them is a small, contained
-task; it is not an architectural weakness, just unfinished demolition. Do the readers first: a
-migration that drops a column still referenced by a runtime query is item 2 all over again.
+**The private link** is gone in behaviour and, since #199, in code — the readers are removed and
+the naming with them. `magicdns_host` survives (it still carries a directly addressable host in dev)
+and the old state column is now inert with zero readers. Dropping that column is what remains, and
+it is a migration, not an architectural weakness. The order still matters: a migration that drops a
+column a runtime query still names is item 2 all over again.

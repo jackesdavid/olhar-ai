@@ -66,7 +66,7 @@ GET /recording/{clip_id}
 
 The edge holds no cooldown state — that timer lives entirely in the workflow graph.
 
-The tailnet routes these through `tailscale serve` exactly like snapshots today.
+The private link routes these through `the private link serve` exactly like snapshots today.
 
 ---
 
@@ -114,7 +114,7 @@ CREATE INDEX recordings_tenant_camera ON recordings (tenant_id, camera_ip, start
 **Extend `sentinel-control/src/domain/mod.rs`** (new `recordings` sub-module):
 - `POST /config/recordings/clip` — edge pushes finalized clip metadata; control inserts into DB.
 - `GET /recordings?camera_ip=<ip>&limit=50` — list clips for tenant (auth-gated).
-- `GET /recordings/{id}/download` — proxy bytes from edge via tailnet (`reqwest` stream through axum body).
+- `GET /recordings/{id}/download` — proxy bytes from edge via private link (`reqwest` stream through axum body).
 
 ---
 
@@ -186,7 +186,7 @@ OnTelegramMessage("stop")  → StopRecording(camera)
 
 2. **Hardware codec** → **Yes, configurable.** `EDGE_RECORDINGS_CODEC` env var (default: `libx264`). Document common values: `h264_v4l2m2m` (RPi/ARM SBC), `h264_nvenc` (NVIDIA), `h264_vaapi` (Intel). The ring buffer segments use the same codec var so the concat step doesn't need transcoding.
 
-3. **Playback delivery** → **Control proxy.** `GET /recordings/{id}/download` on control streams bytes from the edge via tailnet using `reqwest` streamed into axum response body. Uniform, works off-LAN, no browser Tailscale requirement.
+3. **Playback delivery** → **Control proxy.** `GET /recordings/{id}/download` on control streams bytes from the edge via private link using `reqwest` streamed into axum response body. Uniform, works off-LAN, no browser the private link requirement.
 
 4. **Separate tmpdir for ring buffer** → **Yes.** `EDGE_RING_TMPDIR` (default: `/tmp/sentinel_ring`) for the rolling TS segments — fast local tmpfs, lost on reboot (acceptable; ring is ephemeral). `EDGE_RECORDINGS_DIR` (default: `/var/lib/sentinel/recordings`) for finalized MP4 clips — persistent across restarts.
 

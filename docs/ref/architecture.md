@@ -48,7 +48,8 @@ catalog, available to every tenant — see [workflows ref](workflows.md)).
 **Browser ⇄ control** (`API_BASE`, JWT bearer): everything except live video.
 
 the gateway resolves the tenant's box host via control `/internal/box-upstream` (cached 30s),
-then bridges to `wss://<box-host>/api/ws` over the tailnet. Snapshots/frames go the same way.
+then bridges to `wss://<box-host>/api/ws` where the box is directly addressable, and over the
+edge's own outbound connection otherwise. Snapshots/frames go the same way.
 
 `edge_base(tenant)` = the tenant's box host and fetches `/api/frame.jpeg?src=cam_<ip>`.
 
@@ -59,12 +60,14 @@ user's JWT; the edge derives it from its `BOX_TOKEN` (sha256 → `tenant_boxes`)
 inherently multi-tenant (loads all tenants' graphs, keys everything by `(tenant, …)`). The
 SSE relays filter strictly by the caller's tenant.
 
-## The tailnet (how the cloud reaches LAN cameras)
+## How the cloud reaches LAN cameras
 
-at `https://<magicdns-host>/` (TLS via MagicDNS). The VPS (gateway + flow) are also tailnet
-nodes, so they reach the edge privately. The box reports its MagicDNS host on the heartbeat
-(`X-Box-Host` → `tenant_boxes.magicdns_host`); `box_host_for_tenant` returns the
-most-recently-seen one. **If the edge isn't connected to the tailnet, Live + GetCurrentFrame
+The edge is **outbound-only** (card #144). It dials control over HTTPS and holds one outbound SSE
+command stream; the cloud enqueues commands (frames, probes, recordings, live) and the box picks
+them up on that stream. The box reports its host on the heartbeat (`X-Box-Host` →
+`tenant_boxes.magicdns_host`), which `box_host_for_tenant` returns — used only where the edge is
+directly addressable, i.e. dev. **A direct HTTP call from a cloud service to a deployed box reaches
+nothing.** The private-mesh era was removed from the code in #199.
 
 ## Key persisted state (Postgres, `crates/app-core/migrations`)
 

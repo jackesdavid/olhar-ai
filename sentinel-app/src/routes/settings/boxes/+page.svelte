@@ -102,7 +102,7 @@
   });
 
   function buildCommand(token: string): string {
-    // The edge is outbound-only now (#144) — no tailnet, so no auth key. It needs only where the
+    // The edge is outbound-only now (#144), so there is no VPN auth key. It needs only where the
     // cloud is and its own identity.
     return [
       `curl -fsSL ${API_BASE}/install.sh | sudo sh -s -- \\`,
@@ -178,7 +178,7 @@
     return b.gstreamer_ok === false;
   }
   // Boxes whose media path can't work. The edge reaches the cloud outbound-only now (#144 — SSE
-  // commands + live over its own outbound connection), so there is no tailnet to be "offline" on.
+  // commands + live over its own outbound connection), so there is no VPN to be "offline" on.
   const unhealthy = $derived(list.filter((b) => mediaMissing(b)));
   function healthHint(b: Box): string {
     if (mediaMissing(b)) return t.healthHint(b.name);

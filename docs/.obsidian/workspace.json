@@ -197,8 +197,10 @@
       "obsidian-excalidraw-plugin:New drawing": false
     }
   },
-  "active": "8518e2148d78c50b",
+  "active": "7c43a427b670a2b2",
   "lastOpenFiles": [
+    "plans/retire-the-private-link.md",
+    "plans/retire-the-private-link.md",
     "Task Board.md",
     "2026-08-18.md",
     "Untitled.base",
@@ -227,7 +229,6 @@
     "plans/device-gate-map/05-attention-limits.md",
     "plans/device-gate-map/04-token-shape.md",
     "plans/device-gate-map/03-run-state-while-suspended.md",
-    "plans/device-gate-map/02-biometrics-without-biometrics.md",
     "plans/device-gate-map",
     "agents",
     "plans/tuya-oem-map",

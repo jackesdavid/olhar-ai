@@ -13,7 +13,7 @@ the shared on-prem Postgres for the device list.
 
 ## Install (client appliance — one command)
 
-The client runs this once on their box; it installs Tailscale, fetches the
+The client runs this once on their box; it installs the edge, fetches the
 
 ```sh
 curl -fsSL https://github.com/olharai/Sentinel/releases/latest/download/install.sh \
@@ -41,7 +41,6 @@ cargo run -p sentinel-edge
 |---|---|---|
 | `DATABASE_URL` | `postgres://sentinel:sentinel@localhost/sentinel` | device list |
 | `EDGE_BIND` | `0.0.0.0:8788` | local REST listen address |
-| `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_TAGS` | — | Tailscale enrollment (opt-in) |
 
 ## API
 
@@ -49,18 +48,10 @@ cargo run -p sentinel-edge
 |---|---|---|
 | `GET` | `/devices` | the cameras (`ip`, `name`, `has_stream`) |
 
-## Tailscale (private link to the gateway)
+## Reaching the edge
 
-With `TS_AUTHKEY` set the edge runs, at startup:
-
-```sh
-tailscale up --authkey=<key> --hostname=$TS_HOSTNAME --advertise-tags=$TS_TAGS
-tailscale serve --bg 1984
-```
-
-`https://<TS_HOSTNAME>.<tailnet>.ts.net` (MagicDNS TLS). Without `TS_AUTHKEY` it skips
-Tailscale (LAN/one-box dev). Needs `tailscaled` installed + MagicDNS & HTTPS certs
-enabled on the tailnet.
+Nothing dials into the box. The edge is outbound-only (card #144): it reaches control over
+HTTPS, holds one outbound SSE command stream, and pushes live video out to the gateway.
 
 ## Motion detection (OpenCV MOG2)
 
@@ -87,5 +78,4 @@ build additionally needs **libclang** (bindgen):
 
 ## Not yet (later phases)
 
-Dynamic per-tenant enrollment broker (gateway mints short-lived auth keys),
-offboarding via the Tailscale API, edge-local vision co-location. See the plan.
+Edge-local vision co-location. See the plan.

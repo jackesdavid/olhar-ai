@@ -35,8 +35,7 @@ pub async fn ws_handler(
 
     // Live-over-outbound first (card #144): if the gateway has a public WS address, ask control to
     // set up the stream. When the tenant's edge is on the SSE command channel, control tells it to
-    // dial us back — no tailnet needed. Otherwise (or if anything fails) we fall through to the
-    // tailnet path below, unchanged.
+    // dial us back. Otherwise (or if anything fails) we fall through to the direct path below.
     if !state.public_ws_url.is_empty() {
         let session = uuid::Uuid::new_v4().to_string();
         let callback = format!(
@@ -54,7 +53,9 @@ pub async fn ws_handler(
         }
     }
 
-    // Tailnet path (existing): the gateway dials the edge's MSE server (its own GStreamer one first,
+    // Direct path: the gateway dials the edge's MSE server itself (its own GStreamer one first).
+    // Only a directly reachable edge answers — a LAN box in dev, or the static upstream. A deployed
+    // edge is outbound-only (card #144), so this reaches nothing there.
     let base = state.upstream_for(claims.tid.as_deref(), &token).await;
     let mut candidates = Vec::new();
     if let Some(edge) = state.live_edge_ws(&base) {
@@ -157,7 +158,7 @@ async fn bridge_ws(client: WebSocket, state: Arc<AppState>, candidates: Vec<Stri
         if !is_fallback && state.live_edge_is_dead(url) {
             continue;
         }
-        // Not every box even exposes the edge's port on its tailnet, and there the connect does not
+        // Not every box even exposes the edge's port, and there the connect does not
         // fail — it hangs. Give the preferred upstream a short leash so falling back is quick; only
         // the real fallback, which has nowhere else to go, gets the patient timeout.
         let budget = if is_fallback {

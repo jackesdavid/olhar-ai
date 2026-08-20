@@ -151,7 +151,7 @@ pub(super) fn run_region(
 /// currently-confirmed track across every job watching it, `GET {edge_api}/tracks/{ip}`. The
 /// query counterpart to the `object_entered`/`object_exited`/`line_crossed` *events*: "what's
 /// tracked right now" instead of "something just changed". Same edge-API path as
-/// Start/StopRecording (tailnet, port 8080) — see `resolve_edge_api_base`.
+/// Start/StopRecording (direct, port 8080) — see `resolve_edge_api_base`.
 pub(super) fn run_get_tracked_objects(
     inputs: &PortValues,
     sys: &ToolContext,
@@ -164,7 +164,7 @@ pub(super) fn run_get_tracked_objects(
         .and_then(PortValue::as_camera)
         .map(|c| c.ip.clone())
         .ok_or("missing required input 'camera'")?;
-    // SSE command channel first (card #144 — works for a box with no tailnet); tailnet fallback.
+    // SSE command channel first (card #144 — works for an outbound-only box); direct fallback.
     let tracks_path = format!("/tracks/{camera_ip}");
     let items: Vec<Value> = if let Some(res) = crate::edge_commands::edge_http_via_sse_blocking(
         &sys.db,

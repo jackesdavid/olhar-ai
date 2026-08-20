@@ -8,7 +8,7 @@ export type PendingInstall = {
   name: string;
   token: string;
   command: string;
-  auto: boolean; // Tailscale key was auto-minted (transparent enrollment)
+  auto: boolean; // the box token was auto-minted (transparent enrollment)
   needsKey: boolean; // no auto key and no manual key → the command has a placeholder
 };
 

@@ -55,9 +55,6 @@ FROM fedora:${FEDORA} AS runtime
 RUN dnf install -y --setopt=install_weak_deps=False \
       iproute procps-ng ca-certificates \
       gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free \
- && dnf install -y 'dnf-command(config-manager)' \
- && dnf config-manager addrepo --from-repofile=https://pkgs.tailscale.com/stable/fedora/tailscale.repo \
- && dnf install -y tailscale \
  && dnf clean all
 COPY --from=build /src/sentinel-edge/target/release/sentinel-edge /usr/local/bin/sentinel-edge
 COPY deploy/edge-linux/entrypoint.sh /entrypoint.sh

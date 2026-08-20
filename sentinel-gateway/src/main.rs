@@ -2,7 +2,7 @@
 //!
 //! Phase 2 of the cloud decomposition. End-user browsers connect here; the gateway
 //! proxies live video (MSE over WebSocket) and JPEG snapshots through to a client's
-//! localhost-only + `tailscale serve`'d, so it's never exposed directly.
+//! localhost-only behind the reverse proxy, so it's never exposed directly.
 //!
 //! Single-tenant for now: one configured upstream (`EDGE_UPSTREAM`). The per-tenant
 //! registry + JWT slot into `AppState::resolve_upstream` later (no transport change).
@@ -11,7 +11,6 @@
 //!   EDGE_UPSTREAM=http://127.0.0.1:1984 GATEWAY_BIND=0.0.0.0:8789 \
 //!   cargo run -p sentinel-gateway        # or: task gateway
 //!
-//! Optional env: `TS_AUTHKEY`/`TS_HOSTNAME`/`TS_TAGS` to join the tailnet at startup.
 mod auth;
 mod datadog;
 mod http;
@@ -66,10 +65,8 @@ async fn main() {
         }
     };
 
-    // Join the tailnet if configured (so MagicDNS upstreams resolve over the VPN).
-
     // This gateway's public WS base — the address an edge dials back for live-over-outbound
-    // (card #144). Unset → outbound live is off and live uses the tailnet path.
+    // (card #144). Unset → outbound live is off and live uses the direct path.
     let public_ws_url = std::env::var("GATEWAY_PUBLIC_WS").unwrap_or_default();
 
     let state = Arc::new(AppState::new(

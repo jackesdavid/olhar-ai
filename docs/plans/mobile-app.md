@@ -100,7 +100,7 @@ _Deliberately "prepare the ground," not full parity. The phone becomes just anot
 - **Enrollment**: reuse the pairing-code flow — the app accepts a pasted code / deep-link and redeems `POST /enroll` → stores box token in `expo-secure-store`. No control-side change (a phone is another box). Health/report protocol (`/config/*` POSTs, `X-Edge-*` headers) is plain HTTP/JSON — reusable as-is.
 - **Native edge core via UniFFI**: compile the pure-Rust pieces (`mog2.rs` motion, tract YOLOX detector) into a mobile library; the OS camera API feeds decoded frames in. Motion/detection run on-device, reporting `motion`/`track-event`/`face` to control exactly like a Linux edge.
 - **Synthetic camera**: instead of ONVIF discovery, inject one `Device` representing the phone's own camera (stable `id`, pseudo-`ip`/device-id, `rtsp_url` = the phone's local stream). Control's `configured_cameras` is IP-keyed — decide (Open decision) whether to mint a synthetic IP or extend the model.
-- **Scope for this phase = a spike + a written parity matrix + a working motion-only report path** (phone enrolls, joins tailnet, reports motion; live-from-phone can trail as its own card once the shim approach is proven).
+- **Scope for this phase = a spike + a written parity matrix + a working motion-only report path** (phone enrolls, joins private link, reports motion; live-from-phone can trail as its own card once the shim approach is proven).
 
 ## Phase 5 — Polish (post-MVP)
 

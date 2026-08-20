@@ -24,12 +24,6 @@ This build isn't code-signed yet, so Windows SmartScreen may say "Windows
 protected your PC". Click "More info" -> "Run anyway". Signing (which removes
 the warning) comes later.
 
-TAILSCALE (only needed for live video)
---------------------------------------
-Enrollment, motion and recording work without it. To watch live video remotely,
-install Tailscale from https://tailscale.com/download/windows first — the edge
-finds it automatically.
-
 UNINSTALL
 ---------
 From an Admin PowerShell in this folder:

@@ -14,21 +14,22 @@ pub type EdgeSession = oneshot::Sender<WebSocket>;
 
 /// How control says to reach the edge for a live request.
 pub enum LiveStart {
-    /// The edge was told to dial the gateway back — await it on the rendezvous (no tailnet).
+    /// The edge was told to dial the gateway back — await it on the rendezvous.
     Sse,
-    /// No SSE box; the gateway dials this tailnet host itself, as before (`None` → static fallback).
-    Tailnet(Option<String>),
+    /// No SSE box; the gateway dials this host itself (`None` → the static upstream). Only a
+    /// directly reachable edge answers this — a LAN box in dev, or the local go2rtc upstream.
+    Direct(Option<String>),
 }
 
 /// Shared across handlers (always behind an `Arc`).
 pub struct AppState {
-    /// `https://tenant-001.<tailnet>.ts.net` (tailnet) or `http://127.0.0.1:1984` (dev).
+    /// The static upstream — `http://127.0.0.1:1984` (dev) or whatever `UPSTREAM` names.
     pub upstream: String,
     /// Control plane base (`CONTROL_URL`) for the per-tenant box-host lookup.
     pub control_url: String,
     /// This gateway's public WebSocket base (`GATEWAY_PUBLIC_WS`, e.g. `wss://gateway.example.com`)
     /// — the address an edge dials back for live-over-outbound. Empty → outbound live disabled
-    /// (the gateway can't tell the edge where to reach it), so live falls back to the tailnet path.
+    /// (the gateway can't tell the edge where to reach it), so live falls back to the direct path.
     pub public_ws_url: String,
     /// Shared HTTP client for snapshot/asset passthrough + the control lookup.
     pub http: reqwest::Client,
@@ -73,8 +74,9 @@ impl AppState {
     }
 
     /// Ask control to set up a live stream (card #144). Returns `LiveStart::Sse` when control told
-    /// the tenant's edge to dial `callback` back (outbound; no tailnet), or `LiveStart::Tailnet`
-    /// with the host the gateway should dial itself. Any failure degrades to the tailnet path.
+    /// the tenant's edge to dial `callback` back (outbound), or `LiveStart::Direct` with the host
+    /// the gateway should dial itself. Any failure degrades to the direct path, which reaches a
+    /// deployed edge only in dev — in production the edge is outbound-only.
     pub async fn live_start(&self, token: &str, src: &str, callback: &str) -> LiveStart {
         let url = format!("{}/internal/live-start", self.control_url);
         let body = serde_json::json!({ "src": src, "callback": callback });
@@ -89,19 +91,19 @@ impl AppState {
             Ok(r) => r,
             Err(e) => {
                 log::warn!("live-start lookup failed ({url}): {e}");
-                return LiveStart::Tailnet(None);
+                return LiveStart::Direct(None);
             }
         };
         let v: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("live-start decode failed: {e}");
-                return LiveStart::Tailnet(None);
+                return LiveStart::Direct(None);
             }
         };
         match v.get("mode").and_then(|m| m.as_str()) {
             Some("sse") => LiveStart::Sse,
-            _ => LiveStart::Tailnet(v.get("host").and_then(|h| h.as_str()).map(str::to_string)),
+            _ => LiveStart::Direct(v.get("host").and_then(|h| h.as_str()).map(str::to_string)),
         }
     }
 
@@ -157,8 +159,8 @@ impl AppState {
         }
     }
 
-    /// reported — the edge serves its API on `:8080` over the tailnet (`tailscale serve --https=8080
-    /// 8788`) and on `:8788` locally. `None` when the base is a shape we cannot map, in which case
+    /// The edge's own WebSocket API derived from an upstream base: `:8080` when the base is a
+    /// bare https host, `:8788` locally. `None` when the base is a shape we cannot map.
     ///
     /// Mirrors `app_core::ports`'s derivation for the warm-snapshot path, which resolves the same
     /// two endpoints on the same box.
@@ -219,12 +221,12 @@ mod live_edge_ws_tests {
         )
     }
 
-    /// own API on 8080 (`tailscale serve --https=8080 8788`).
+    /// A bare https host maps to the edge's own API on 8080.
     #[test]
-    fn maps_a_tailnet_host_to_the_edge_api_port() {
+    fn maps_an_https_host_to_the_edge_api_port() {
         assert_eq!(
-            state().live_edge_ws("https://tenant-001.taile123.ts.net"),
-            Some("wss://tenant-001.taile123.ts.net:8080".into())
+            state().live_edge_ws("https://tenant-001.example.com"),
+            Some("wss://tenant-001.example.com:8080".into())
         );
     }
 

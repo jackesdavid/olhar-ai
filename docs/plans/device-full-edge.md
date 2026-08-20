@@ -5,12 +5,12 @@
 > cameras from control, runs the frame hub (MOG2 motion) and the real recording manager. Proven:
 > C100 (192.168.0.7) recorded on-device via GStreamer → clip → manifest → R2 (`upload_state=uploaded`),
 > no /dev shortcuts. Enrolled edge fixes: iOS sandbox paths (cache/env/recordings), skip
-> self-update+tailscale, bind 127.0.0.1, `gstreamer_ok` for gst-linked builds. Support fixes:
-> Devices "Save without testing" (a localhost-only box can't be tailnet-probed, so its creds couldn't
+> self-update+the private link, bind 127.0.0.1, `gstreamer_ok` for gst-linked builds. Support fixes:
+> Devices "Save without testing" (a localhost-only box can't be probed, so its creds couldn't
 >
 > **NEXT — the one-connection media path (user's hard rule):** a single GStreamer `rtspsrc ! tee` per
 > out) never opens N direct dials to a ~1-session camera. Then: live to the gateway (blocked today —
-> no tailnet on the phone), snapshots on gstreamer-linked, Android (same recipe). Phone is
+> no inbound reachability on the phone), snapshots on gstreamer-linked, Android (same recipe). Phone is
 > foreground-only (iOS suspends background) — an on-demand edge, not 24/7.
 
 **Board card:** #144 full edge on device — phone runs sentinel-edge (1–2 cameras)
@@ -124,7 +124,7 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
   decodes → muxes → `record_and_upload` (reusing the appliance's exact cloud path) pushes the manifest
   to **control.thesentinels.online** (box token from self-register) → presigned PUT → bytes straight
   to R2 → confirm. Verified in the **production DB**: `phone-phone-clip-104452, camera_ip=phone,
-  104452 B, upload_state=uploaded`. **No Mac, no appliance, no tailnet — all outbound HTTPS.** Fixes
+  104452 B, upload_state=uploaded`. **No Mac, no appliance, no inbound reachability — all outbound HTTPS.** Fixes
   along the way: the R2 button self-registers the phone (it had no box token), and the app passes the
   real control URL (the embedded edge had no `CONTROL_URL` env, defaulting to dev localhost). The
   breadcrumb file in the sandbox (`r2-step.txt`, pulled via `devicectl`) pinpointed each failure —
@@ -138,9 +138,9 @@ the `.a` and bundles the GStreamer framework — and repeating the link for Andr
 
 The edge assumes an appliance; on a phone several must be revisited (name real code):
 - **Paths** (`sentinel-edge/src/paths.rs`) — the phone's app sandbox, not `/opt/sentinel-edge`.
-- **Tailscale** (`tailscale.rs`) — a phone edge on the same LAN as its cameras may not need the
-  tailnet at all (cameras are directly reachable); the cloud reaches it only for config, which it can
-  poll outbound. Decide: no-tailnet phone edge vs. Tailscale iOS/Android.
+- **the private link** (the key-minting module (removed in #199)) — a phone edge on the same LAN as its cameras may not need the
+  private link at all (cameras are directly reachable); the cloud reaches it only for config, which it can
+  poll outbound. Decide: outbound-only phone edge vs. a VPN client on the phone.
 - **Cameras** — the phone is **on the Wi-Fi LAN**, so `rtspsrc` reaches cameras directly, same as an
   appliance. This is what makes 1–2 cameras realistic.
 

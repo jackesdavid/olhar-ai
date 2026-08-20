@@ -48,7 +48,7 @@ ai/sidecar/
 ## GPU box (RTX 2060 — in-progress)
 
 - **Machine:** Bazzite Linux, hostname `customer`, user `jack`
-- **Tailnet IP:** `100.84.250.126` — SSH alias `gpu-box` in `~/.ssh/config` with `~/.ssh/id_rsa`
+- **IP:** `100.84.250.126` — SSH alias `gpu-box` in `~/.ssh/config` with `~/.ssh/id_rsa`
 - **NOPASSWD sudo:** `/usr/bin/podman` only (`/etc/sudoers.d/sentinel-ai`)
 - **Driver:** 595.71.05, CUDA 13.2 capable; RTX 2060 SUPER 8 GB
 - **CDI config:** `/etc/cdi/nvidia.yaml` present; `--device nvidia.com/gpu=all` works with `sudo podman`

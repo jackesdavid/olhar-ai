@@ -2,7 +2,7 @@ use super::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use serde_json::Value;
 
-/// Edge recording calls go over the tailnet and must not hang the node (a bare `ureq::post`
+/// Edge recording calls must not hang the node (a bare `ureq::post`
 /// has no timeout). Cap below the node watchdog (15s) so a stalled edge fails fast with a
 /// clean error instead of leaking the watchdog's detached worker thread.
 pub(super) fn edge_agent() -> ureq::Agent {
@@ -113,8 +113,8 @@ fn sse_box(sys: &ToolContext, camera_ip: &str) -> Option<uuid::Uuid> {
 ///
 /// **Card #144 — versioned + backward compatible.** If the tenant has a live SSE command stream, the
 /// command rides *down* it (works for an outbound-only box the cloud can't reach inbound — a phone,
-/// and eventually every edge once the tailnet is retired). Otherwise it takes the historical
-/// **tailnet POST** to `magicdns_host:8080`, unchanged — so existing appliance boxes behave exactly
+/// which is every deployed edge). Otherwise it takes the historical
+/// **direct POST** to `magicdns_host:8080`, unchanged — so a directly reachable box behaves exactly
 /// as before. `cmd` is the SSE command name; `path` is the equivalent local HTTP endpoint.
 fn edge_call(
     sys: &ToolContext,
@@ -202,7 +202,7 @@ fn resolve_edge_base(sys: &ToolContext) -> Result<String, String> {
     }
 }
 
-/// Returns the edge API base URL (port 8080 via tailscale serve).
+/// Returns the edge API base URL (port 8080).
 pub(super) fn resolve_edge_api_base(sys: &ToolContext) -> Result<String, String> {
     let base = resolve_edge_base(sys)?;
     let bare = base

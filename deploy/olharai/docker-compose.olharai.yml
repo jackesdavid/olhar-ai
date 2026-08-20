@@ -18,7 +18,7 @@
 #   JWT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, MASTER_EMAIL, MASTER_PASSWORD,
 #   ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, S3_KEY, S3_SECRET.
 # Placeholders filled on the server before first `up`: __DB_PASS__, __ACME_EMAIL__,
-#   __EDGE_HOST__, __EDGE_TS_IP__ (the fallback edge on the tailnet — same as the old stack).
+#   __EDGE_HOST__, __EDGE_TS_IP__ (the fallback edge address — same as the old stack).
 services:
   traefik:
     # Reverse proxy + automatic Let's Encrypt. Dedicated box, so it's part of this stack now.

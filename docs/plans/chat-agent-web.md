@@ -75,7 +75,7 @@ pub voice: Option<app_core::voice::domain::VoiceConfig>,
 pub stt:   Option<app_core::listen::domain::SttConfig>,
 ```
 All read from env at boot (`AgentConfig::from_env()`, `VoiceConfig::from_env()`,
-`SttConfig::from_env()`). Log enabled/disabled at startup, same pattern as Google/Tailscale.
+`SttConfig::from_env()`). Log enabled/disabled at startup, same pattern as Google/the private link.
 
 Wire into `domain::router()` in `sentinel-control/src/domain/mod.rs`:
 ```rust

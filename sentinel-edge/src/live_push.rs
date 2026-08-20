@@ -1,7 +1,7 @@
 //! Outbound live push (card #144, live-over-outbound).
 //!
-//! The gateway normally dials *into* the edge's `/api/ws` over the tailnet. An outbound-only edge
-//! (phone/Android, and every edge once the tailnet is retired) can't be reached that way, so we
+//! The gateway can only dial *into* the edge's `/api/ws` where the edge is directly addressable.
+//! An outbound-only edge can't be reached that way, so we
 //! flip the direction: on a `start_live` command (delivered over the SSE channel), the edge dials
 //! the gateway and pushes the camera's fMP4 up that connection. The **wire contract is identical**
 //! to the inbound `mse_socket` — the gateway bridges browser↔edge transparently — only the socket's

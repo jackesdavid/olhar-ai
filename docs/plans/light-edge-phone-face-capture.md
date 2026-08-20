@@ -41,7 +41,7 @@ camera identity so a workflow can bind to it.
   box id, so unique with no second identifier) on every face event. **DONE (Phase 1):** `POST
   /boxes/self-register` (UserClaims, `devices.write`) → `store::create_box_with_platform(…,
   "ios-lite")` → returns `{ box_id, camera_ip, token }`; the phone stores the token in the keychain.
-  No Tailscale key, no pairing code.
+  No edge auth key, no pairing code.
 - **Why NO `devices` row (discovered reading the code).** `devices` is **full-replaced** by the
   appliance's camera sync — `app_core::devices::repo::save` does `DELETE all-for-tenant + re-insert`
   the edge's list. A phone-camera row injected there would be wiped the next time any appliance in the

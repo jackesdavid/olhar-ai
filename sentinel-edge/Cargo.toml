@@ -28,7 +28,7 @@ app-core = { path = "../crates/app-core", features = ["gst-linked"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 axum = { version = "0.7", features = ["ws"] }
 # Outbound WebSocket client — the edge dials the gateway to push live video up its own connection
-# (card #144, live-over-outbound), so live works with no tailnet. rustls (pure-Rust).
+# (card #144, live-over-outbound), so live needs no inbound reachability. rustls (pure-Rust).
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tower-http = { version = "0.5", features = ["cors"] }
 # Pull the camera config from the control plane (cloud-managed, cached locally).

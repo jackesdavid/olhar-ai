@@ -12,8 +12,6 @@ kanban-plugin: board
 - [ ] #2 Pricing simulator: surface managed vs self-hosted AI in Settings UI
 - [ ] #3 Multi-pod sentinel-flow: shared event fabric
 	  - Plan: [[multi-pod-flow-event-fabric]]
-- [ ] #4 Box re-key / rotate enrollment action
-	  - Plan: [[box-rekey-enrollment]]
 - [ ] #5 Recipients management UI (add/edit/remove notification targets)
 - [ ] #6 Define site/zones model in workflows domain
 - [ ] #7 AI/Vision node ideas — research backlog
@@ -29,8 +27,6 @@ kanban-plugin: board
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
 - [ ] #9 We should encrypt the passwords in the db column level too
 - [ ] #10 Update available — reload to get the latest version.
-- [ ] #93 Box health copy leaks internals ("tailnet", "Tailscale") to users
-	  - Plan: [[box-health-copy-no-internals]]
 
 
 ## Specification
@@ -57,8 +53,10 @@ kanban-plugin: board
 	  - Plan: [[self-hosted-runners]]
 - [ ] #169 Windows self-hosted runner + release:edge-windows
 	  - Plan: [[self-hosted-runners]]
-- [ ] #161 Retire the tailnet remnants — drop magicdns_host + tailscale_state (readers first)
+- [ ] #161 Drop the inert box columns left by the private-link era
 	  - Plan: [[architecture-weaknesses]]
+	  - Readers done in #199 — the column now has none. What remains is the migration
+	    that drops it, validated against a live DB first.
 - [ ] #152 Edge signing §3 P2→P3 — soak, then flip signing_mode to required per box
 	  - Plan: [[security-hardening-remainder]]
 - [ ] #118 Edge detection timing metrics — motion/face detect ms + rate
@@ -154,6 +152,10 @@ kanban-plugin: board
 
 ## Validation
 
+- [ ] #199 Retire the private-link remnants from the code, not just the architecture
+	  - Plan: [[retire-the-private-link]]
+	  - Uncovered a live bug: health_at was gated on a header the edge no longer sends,
+	    so box health timestamps had silently frozen. Re-gated on the GStreamer flag.
 - [ ] #195 Capture-from-camera always failed — enroll and recognize called a stub
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
@@ -181,6 +183,9 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #93 Box health copy no longer names the plumbing to users
+	  - Closed by #199: the words are gone from the copy and from the code behind it.
+	    Devices "save without testing" now explains itself in plain terms.
 - [x] #192 Split `tuya.control` out of `tuya.write` — editing labels should not open gates
 	  - The test endpoint picks the permission from its PAYLOAD: code+value writes and needs
 	    tuya.control; without them it only reads. Admins keep working via the boot seed; a

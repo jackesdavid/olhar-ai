@@ -6,7 +6,7 @@
 //! result is POSTed back to `/config/edge/command-result`.
 //!
 //! This is how the cloud commands a box it cannot reach inbound: the box is outbound-only (a phone
-//! with no tailnet, and eventually every edge once the tailnet is retired). Blocking + `ureq`,
+//! that the cloud cannot reach inbound). Blocking + `ureq`,
 //! matching the edge's thread model; reconnects with backoff.
 
 use std::io::{BufRead, BufReader};

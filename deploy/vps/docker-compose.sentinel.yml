@@ -207,7 +207,7 @@ services:
       S3_SECRET: ${S3_SECRET}
       AI_SERVICE_URL: http://sentinel-ai:8000/runsync
       # resolved from the registry at run time; reaching ARBITRARY tenant edges needs the
-      # pod on the tailnet (deferred) — until then the single edge below is reachable.
+      # pod reachable from the cloud (deferred) — until then the single edge below is reachable.
     extra_hosts:
       - "__EDGE_HOST__:__EDGE_TS_IP__"
     depends_on:

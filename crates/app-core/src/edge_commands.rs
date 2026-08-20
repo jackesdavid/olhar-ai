@@ -343,7 +343,7 @@ pub fn edge_http_via_sse_blocking(
     body: Option<serde_json::Value>,
     timeout_secs: u64,
 ) -> Option<Result<(u16, Vec<u8>), String>> {
-    // A fresh SSE-reachable box is the signal to use SSE; None → caller uses its tailnet path.
+    // A fresh SSE-reachable box is the signal to use SSE; None → caller uses its direct path.
     let box_id = tenant_id_box(db, tenant_id)?;
     let id = enqueue_blocking(
         db,

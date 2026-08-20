@@ -324,7 +324,7 @@ pub fn normalize_host(host: &str) -> String {
     }
 }
 
-/// The edge API (recording, snapshot) runs on :8080 via `tailscale serve --https=8080`.
+/// The edge API (recording, snapshot) runs on :8080 when reached directly.
 pub fn edge_api_base(base: &str) -> String {
     // If it already has a port, use as-is.
     let after_scheme = base

@@ -5,7 +5,7 @@ architecture: `docs/plans/multi-tenant-gateway-edge.md`).
 
 End-user browsers connect here; the gateway proxies **live video (MSE over
 WebSocket)** and **JPEG snapshots** through to a client's on-prem `sentinel-edge`
-`tailscale serve`'d, so it's never exposed directly.
+behind the reverse proxy, so it's never exposed directly.
 
 ```
 ```
@@ -30,7 +30,6 @@ cargo run -p sentinel-gateway
 | Env | Default | Purpose |
 |---|---|---|
 | `GATEWAY_BIND` | `0.0.0.0:8789` | listen address |
-| `TS_AUTHKEY` / `TS_HOSTNAME` / `TS_TAGS` | — | join the tailnet at startup (opt-in) |
 
 ## Verify
 
@@ -42,7 +41,7 @@ curl "localhost:8789/api/frame.jpeg?src=cam_<ip>" -o f.jpg     # snapshot passth
 ```
 
 The upstream scheme drives the transport: `http://` → `ws://`, `https://` → `wss://`,
-so dev (loopback) and prod (tailnet TLS) use the same code.
+so dev (loopback) and prod (TLS) use the same code.
 
 ## Not yet (later phases)
 

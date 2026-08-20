@@ -9,31 +9,16 @@ in a workspace) so it ships independently; links `app-core` by path.
 1. `logbuf::init()` — capturing logger (tees to stderr + a bounded ring; see Logs below).
 3. `AppState::boot()` — pull cameras from control (cache fallback), resolve RTSP, write cache.
 5. `motion::spawn()` — the continuous motion watcher manager (see Motion below).
-6. Threads: **discovery loop** (every 5 min: `rediscover()` + re-assert `tailscale serve`);
+6. Threads: **discovery loop** (every 5 min: `rediscover()`);
    **config long-poll** (`reload(25)`, then drain `check_commands()` → rescan/restart);
    **log push** (every 3s, ships new ring lines to `/config/logs`).
 
-## Tailscale (the Live dependency)
+## Reaching the edge (outbound-only)
 
-and **always attempts serve even if `up` fails** (a macOS GUI-app daemon makes `up` exit
-
-**Enrollment key (per box):** control mints the `--authkey` when a box is created
-(`sentinel-control/src/tailscale.rs`, OAuth client → Tailscale API). The key is
-**reusable + non-ephemeral**, ~90 days (`TS_KEY_EXPIRY_SECS`) — so the edge re-auths on
-every reboot from the key baked into `edge.env`, and the node keeps a stable MagicDNS name.
-(It used to be single-use + ephemeral + 30 min, which dropped boxes off the tailnet on the
-first reboot.) Re-keying an existing box = recreate it in Settings → Boxes and reinstall.
-
-`install.sh` installs Tailscale headlessly so the appliance joins from the CLI:
-- **Linux**: `curl -fsSL https://tailscale.com/install.sh | sh` (installs `tailscaled`).
-- **macOS**: `brew install tailscale` (the open-source `tailscaled`, NOT the GUI app) as the
-  invoking user (`HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_REQUIRE_TAP_TRUST=1`), then
-  `tailscaled install-system-daemon` (launchd) + `tailscale up --authkey`. Uses a working
-  `tailscale version` (not just PATH) as the install test so a stale GUI-app shim is replaced.
-
-**`tailscale up` exit codes seen:** `1` = up failed (e.g., GUI app not connected); `127` =
-the `tailscale` CLI isn't installed/working. Either way the box is off-tailnet → Live fails
-
+Nothing dials into the box. The edge reaches control over HTTPS, holds one outbound SSE command
+stream (`app_core::edge_commands`), and pushes live video out to the gateway — card #144. There is
+no VPN, no auth key to mint, and no inbound surface to secure. The private-mesh era was removed from
+the code in #199; a direct HTTP call from a cloud service to a box reaches nothing.
 
 (Live video) plays. `install.sh` provisions it (apt/dnf/yum/apk; macOS brew) and bakes a
 
@@ -179,7 +164,7 @@ server. Because the binary is OpenCV-soname-coupled and the target appliance is 
 
 ## Health reporting + Restart
 
-On the heartbeat (the ~25s config poll) the edge sends `X-Edge-Tailscale`
+On the heartbeat (the ~25s config poll) the edge sends `X-Edge-Gstreamer` and
 `X-Edge-Platform` (`OS (arch)`, ASCII-only, e.g. `macOS (aarch64)` / `Bazzite (x86_64)`, from
 `state::platform()` — distro name via `/etc/os-release`) → stamped on `tenant_boxes`
 (`platform` col added in migration 0034) → the **Boxes page** shows per-box badges (platform,
@@ -217,7 +202,7 @@ Security of the redeem path, which is **unauthenticated by necessity** (the box 
 yet — getting one is the point):
 
 - The DB row (`box_pairings`, migration 0055) stores **only a hash of the code**. Redeeming *mints* a
-  fresh box token (rotating `tenant_boxes.token_hash`) and a fresh Tailscale key on the spot, so
+  fresh box token (rotating `tenant_boxes.token_hash`) on the spot, so
   **nothing secret is at rest**.
 - Single use, claimed atomically in one `UPDATE … WHERE claimed_at IS NULL RETURNING`. 15-minute
   expiry. Rate-limited per client.
