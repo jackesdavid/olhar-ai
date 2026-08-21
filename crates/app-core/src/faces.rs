@@ -1522,8 +1522,11 @@ pub fn label_faces(
     db.block(async move {
         let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
-            "INSERT INTO person_embeddings (tenant_id, person_id, embedding, approved, approved_at, source) \
-             SELECT f.tenant_id, $2, f.embedding, true, now(), 'labeled' \
+            // face_id ties the embedding to the face it came from, so deleting the face takes the
+            // embedding with it (0097, ON DELETE CASCADE). Without it a deleted face left its
+            // biometric template behind and recognition went on matching it — card #200.
+            "INSERT INTO person_embeddings (tenant_id, person_id, embedding, approved, approved_at, source, face_id) \
+             SELECT f.tenant_id, $2, f.embedding, true, now(), 'labeled', f.id \
                FROM faces f WHERE f.tenant_id = $1 AND f.id = ANY($3::uuid[])",
         )
         .bind(tenant_id)

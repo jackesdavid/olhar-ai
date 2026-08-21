@@ -39,7 +39,13 @@ export const personDetail = {
     facesEnrolled: (approved: number, total: number) =>
       `${approved} face${approved === 1 ? "" : "s"} enrolled (${total} total)`,
     noFaces: "No faces enrolled yet",
-    openEnrollment: "Open enrollment",
+    noFacesTitle: "No faces yet",
+    noFacesHint: "Label a face in the Faces canvas to add one here.",
+    approved: "Approved",
+    pending: "Pending",
+    approve: "Approve",
+    approveFailed: "Approve failed",
+    removeFailed: "Remove failed",
     // delete dialog
     removeTitle: "Remove person?",
     removeBefore: "Remove ",
@@ -94,7 +100,13 @@ export const personDetail = {
     facesEnrolled: (approved: number, total: number) =>
       `${approved} rosto${approved === 1 ? "" : "s"} cadastrado${approved === 1 ? "" : "s"} (${total} no total)`,
     noFaces: "Nenhum rosto cadastrado ainda",
-    openEnrollment: "Abrir cadastro",
+    noFacesTitle: "Nenhum rosto ainda",
+    noFacesHint: "Rotule um rosto no Canvas de rostos para adicionar um aqui.",
+    approved: "Aprovado",
+    pending: "Pendente",
+    approve: "Aprovar",
+    approveFailed: "Falha ao aprovar",
+    removeFailed: "Falha ao remover",
     // delete dialog
     removeTitle: "Remover pessoa?",
     removeBefore: "Remover ",
