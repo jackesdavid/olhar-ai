@@ -29,7 +29,6 @@ import { boxes } from "./messages/boxes";
 import { boxInstall } from "./messages/boxInstall";
 import { peopleDirectory } from "./messages/peopleDirectory";
 import { personDetail } from "./messages/personDetail";
-import { enroll } from "./messages/enroll";
 import { chat } from "./messages/chat";
 import { map } from "./messages/map";
 import { faces } from "./messages/faces";
@@ -76,7 +75,6 @@ const modules = {
   boxInstall: domain(boxInstall),
   peopleDirectory: domain(peopleDirectory),
   personDetail: domain(personDetail),
-  enroll: domain(enroll),
   chat: domain(chat),
   map: domain(map),
   faces: domain(faces),

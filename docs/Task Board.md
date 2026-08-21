@@ -36,6 +36,9 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #200 Faces: one journey per task, delete means delete, then re-test from zero
+	  - Plan: [[faces-one-journey]]
+	  - Phase 0 is a destructive wipe of person_embeddings + faces (persons kept).
 - [ ] #198 Devices, Recipients and Integrations are split by the wrong rule
 	  - Plan: [[one-name-one-place]]
 - [ ] #196 On-demand graphs are indistinguishable from switched-off ones

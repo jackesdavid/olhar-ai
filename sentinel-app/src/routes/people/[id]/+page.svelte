@@ -9,11 +9,15 @@
   import Users from "@lucide/svelte/icons/users";
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import ScanFace from "@lucide/svelte/icons/scan-face";
+  import Check from "@lucide/svelte/icons/check";
   import Radio from "@lucide/svelte/icons/radio";
 
+  import EmptyState from "$lib/components/empty-state.svelte";
+  import PointCloudAvatar from "$lib/components/point-cloud-avatar.svelte";
   import * as Card from "$lib/components/ui/card";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select";
+  import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
@@ -26,6 +30,28 @@
 
   const t = $derived(dict[lang()].personDetail);
   const c = $derived(dict[lang()].common);
+
+  async function reloadEmbeddings() {
+    embeddings = await data.listEmbeddings(id);
+  }
+
+  async function approveEmbedding(emb: PersonEmbedding) {
+    try {
+      await data.approveEmbedding(emb.id);
+      await reloadEmbeddings();
+    } catch (err) {
+      toast.error(t.approveFailed, { description: String(err) });
+    }
+  }
+
+  async function removeEmbedding(emb: PersonEmbedding) {
+    try {
+      await data.deleteEmbedding(emb.id);
+      await reloadEmbeddings();
+    } catch (err) {
+      toast.error(t.removeFailed, { description: String(err) });
+    }
+  }
 
   const id = $derived($page.params.id ?? "");
   const isNew = $derived(id === "new");
@@ -294,7 +320,7 @@
         <Card.Title class="flex items-center gap-2"><ScanFace class="size-4 text-muted-foreground" /> {t.biometrics}</Card.Title>
         <Card.Description>{t.biometricsDescription}</Card.Description>
       </Card.Header>
-      <Card.Content class="flex items-center justify-between gap-4">
+      <Card.Content class="space-y-4">
         <span class="flex items-center gap-2 text-sm text-muted-foreground">
           <StatusDot state={approvedFaces > 0 ? "online" : "offline"} />
           {#if isNew}
@@ -305,10 +331,37 @@
             {t.noFaces}
           {/if}
         </span>
+
         {#if !isNew}
-          <Button variant="outline" onclick={() => goto(`/people/${id}/enroll`)}>
-            <ScanFace class="size-4" /> {t.openEnrollment}
-          </Button>
+          {#if embeddings.length === 0}
+            <EmptyState title={t.noFacesTitle} description={t.noFacesHint} />
+          {:else}
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+              {#each embeddings as emb (emb.id)}
+                <div class="space-y-2 rounded-xl border border-border p-3">
+                  <PointCloudAvatar embedding={emb.embedding} size={120} />
+                  <div class="flex items-center justify-between gap-2">
+                    <Badge variant="outline" class="text-[10px] capitalize">{emb.source || "?"}</Badge>
+                    {#if emb.approved}
+                      <span class="flex items-center gap-1 text-[11px] text-primary"><Check class="size-3" /> {t.approved}</span>
+                    {:else}
+                      <span class="text-[11px] text-amber-500">{t.pending}</span>
+                    {/if}
+                  </div>
+                  <div class="flex items-center gap-1">
+                    {#if !emb.approved}
+                      <Button variant="ghost" size="sm" class="h-7 flex-1 text-xs" onclick={() => approveEmbedding(emb)}>
+                        <Check class="size-3.5" /> {t.approve}
+                      </Button>
+                    {/if}
+                    <Button variant="ghost" size="sm" class="h-7 text-xs text-muted-foreground hover:text-destructive" onclick={() => removeEmbedding(emb)}>
+                      <Trash2 class="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
       </Card.Content>
     </Card.Root>
