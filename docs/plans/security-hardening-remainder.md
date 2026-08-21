@@ -5,6 +5,16 @@
 **Goal:** finish the security-hardening plan. PRs 1–5 shipped; what remains is one operational
 P0, one applied-by-hand proxy change, and the two gated rollouts.
 
+## Re-verified in production 2026-08-20
+
+Card #154 closed here. The three live measures still hold: the per-IP throttle is attached to the
+login router as `sentinel-login-throttle` (average 20, burst 40, period 1m — note the name, an
+earlier guess of `sentinel-login-rl` returns nothing and looks alarmingly like a missing throttle);
+`/ibbf/traefik.yml` still drops `RequestPath`; and `WEBAUTHN_RP_ID=olharai.com` with
+`WEBAUTHN_RP_ORIGIN=https://app.olharai.com`.
+
+**#148 had fallen off the board entirely** while this plan still listed it open as a P0. Restored.
+
 ## Applied to production 2026-07-30
 
 | Card | State | Verified by |

@@ -20,6 +20,11 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
+	  - Plan: [[security-hardening-remainder]]
+	  - Was missing from the board entirely while the plan still listed it open (P0).
+	  - JWT_SECRET rotates on the box but logs everyone out; the Stripe pair cannot be
+	    rotated from the box at all; MASTER_PASSWORD is deliberately the operator's call.
 - [ ] #197 Disk exhaustion breaks builds, and clean-space can't reclaim the cause
 	  - Plan: [[disk-exhaustion-breaks-everything]]
 - [ ] #183 CI: image push races the build cache and fails ~once a day
@@ -163,8 +168,6 @@ kanban-plugin: board
 	  - Ports are NAMED after the variables, so a rename repoints config AND edges together.
 - [ ] #123 Recognition scoring — per-person template + margin test
 	  - Plan: [[face-recognition-per-person-scoring]]
-- [ ] #154 Security hardening PRs 1–5 — landed, pending prod verification
-	  - Plan: [[security-hardening-remainder]]
 - [ ] #83 Windows installer — signed .exe
 	  - Plan: [[edge-windows-installer]]
 
@@ -179,6 +182,12 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #154 Security hardening PRs 1–5 — prod verification complete
+	  - Plan: [[security-hardening-remainder]]
+	  - RE-VERIFIED live 2026-08-20: per-IP throttle present as sentinel-login-throttle
+	    (20/min, burst 40, on the login router); traefik.yml still drops RequestPath;
+	    WEBAUTHN_RP_ID=olharai.com + origin https://app.olharai.com. The remaining work
+	    is NOT part of this card — it is #148, #151, #152.
 - [x] #199 Retire the private-link remnants from the code, not just the architecture
 	  - Plan: [[retire-the-private-link]]
 	  - VALIDATED on the live DB 2026-08-20: Jack Mac (edge 0.5.73, which does not send the
