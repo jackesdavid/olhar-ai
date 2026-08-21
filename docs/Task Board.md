@@ -36,6 +36,9 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #202 Tauri v2 mobile — share the web app instead of maintaining a second UI
+	  - Plan: [[tauri-mobile-shared-web]]
+	  - Blocked until #185 (App Store readiness) lands — swapping the shell restarts it.
 - [ ] #201 Faces canvas background — match the workflow editor exactly
 	  - Plan: [[faces-canvas-editor-background]]
 - [ ] #200 Faces: one journey per task, delete means delete, then re-test from zero
