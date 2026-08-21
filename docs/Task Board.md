@@ -152,10 +152,6 @@ kanban-plugin: board
 
 ## Validation
 
-- [ ] #199 Retire the private-link remnants from the code, not just the architecture
-	  - Plan: [[retire-the-private-link]]
-	  - Uncovered a live bug: health_at was gated on a header the edge no longer sends,
-	    so box health timestamps had silently frozen. Re-gated on the GStreamer flag.
 - [ ] #195 Capture-from-camera always failed — enroll and recognize called a stub
 - [ ] #181 Mobile onboarding — invite a person, pair their phone
 	  - Plan: [[mobile-tenant-onboarding]]
@@ -183,6 +179,12 @@ kanban-plugin: board
 
 ## Done
 
+- [x] #199 Retire the private-link remnants from the code, not just the architecture
+	  - Plan: [[retire-the-private-link]]
+	  - VALIDATED on the live DB 2026-08-20: Jack Mac (edge 0.5.73, which does not send the
+	    old header) shows health_at 9s old — it could never have stamped under the old code.
+	    Silicom is the bug's fingerprint: health_at frozen 2026-07-29, two days OLDER than
+	    its last_seen, i.e. it kept heartbeating while health froze.
 - [x] #93 Box health copy no longer names the plumbing to users
 	  - Closed by #199: the words are gone from the copy and from the code behind it.
 	    Devices "save without testing" now explains itself in plain terms.

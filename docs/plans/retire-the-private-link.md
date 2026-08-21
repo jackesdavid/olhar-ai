@@ -57,5 +57,8 @@ VPN is carrying it.
 1. A case-insensitive grep for the old names returns nothing outside migrations and `legacy/`.
 2. `cargo check` clean for the workspace AND the out-of-workspace edge crate.
 3. Gateway + app-core unit tests pass.
-4. `health_at` advances on a box heartbeat — **needs checking against the live DB after deploy**,
-   since the freeze was invisible precisely because nothing tested it.
+4. `health_at` advances on a box heartbeat — **VALIDATED 2026-08-20 against the live DB.**
+   `Jack Mac` (edge 0.5.73, which does not send the old header, so the old code could never have
+   stamped it) reported `health_at` 9 seconds old. `Silicom Appliance` carries the bug's
+   fingerprint: `health_at` frozen at 2026-07-29, **two days older than its own `last_seen`** — it
+   went on heartbeating while health quietly stopped advancing.
