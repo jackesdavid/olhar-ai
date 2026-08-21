@@ -105,6 +105,20 @@ export default function Settings() {
 
             <View style={styles.section}>
               <Text style={[typeScale.caption, styles.eyebrow, { color: t.mutedForeground }]}>
+                BENCH
+              </Text>
+              <Card>
+                <Muted>
+                  Face capture turns this phone into a temporary capture source: while the screen is
+                  open it sends frames to the cloud, which detects the face and feeds the same
+                  pipeline an appliance does. Nothing runs in the background.
+                </Muted>
+                <Button label="Face capture" onPress={() => router.push("/capture")} />
+              </Card>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={[typeScale.caption, styles.eyebrow, { color: t.mutedForeground }]}>
                 ACCOUNT
               </Text>
               <Button label="Sign out" onPress={leave} />

@@ -1,10 +1,13 @@
 // The shell.
 //
 // FIVE tabs, in the order someone needs them: the dashboard, one-tap runs, live cameras, the
-// footage those cameras kept, and settings. Capture and Edge were benches — a face-capture rig and
+// footage those cameras kept, and settings. Capture and Edge are benches — a face-capture rig and
 // a local-edge probe — and putting them on the tab bar meant handing a customer a workbench as the
-// front door. They stay as ROUTES (`href: null` keeps them off the bar), reachable by us, invisible
-// to the person using the app.
+// front door. They stay as ROUTES (`href: null` keeps them off the bar).
+//
+// "Reachable by us" has to mean SOMETHING reaches them: `capture` was hidden with no entry point
+// anywhere, so the screen shipped fully built and completely unreachable. Settings → Bench opens
+// it. `edge` is still deliberately unreachable — no one has needed it since.
 //
 // Icons are real icons. The bar was rendering the default placeholder triangles, which is the first
 // thing anyone sees and the last thing that should look unfinished.
