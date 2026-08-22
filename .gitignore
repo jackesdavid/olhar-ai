@@ -50,3 +50,8 @@ deploy/olharai/sentinel.env
 experiments/gst-spike/target/
 experiments/gst-spike/Cargo.lock
 .fingerprint.email-preview/
+
+# Tauri iOS: generated Xcode project + build output. `tauri ios init` regenerates it, and the
+# xcarchive is hundreds of MB — the shell's source of truth is src-tauri/{Cargo.toml,tauri.conf.json,src}.
+sentinel-app/src-tauri/gen/
+sentinel-app/src-tauri/target/
