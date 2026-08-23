@@ -4,12 +4,13 @@
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { page } from "$app/stores";
-  import { goto } from "$app/navigation";
+  import { goto, afterNavigate } from "$app/navigation";
   import { data, onEvent } from "$lib/data";
   import { COMMIT } from "$lib/config";
   import { dict, lang, initLang } from "$lib/i18n";
   import type { Alert } from "$lib/types";
   import { navItems } from "$lib/nav";
+  import Menu from "@lucide/svelte/icons/menu";
   import { Toaster } from "$lib/components/ui/sonner";
   import SentinelLogo from "$lib/components/sentinel-logo.svelte";
   import { theme, loadTheme, toggleTheme } from "$lib/theme.svelte";
@@ -123,6 +124,31 @@
   }
 
   let navCollapsed = $state(false);
+
+  // The sidebar is TWO different things. On a desktop it is a permanent column that can be
+  // narrowed to icons. On a phone there is no room for a column at all — 240px of a 390px screen
+  // is the app — so it becomes an off-canvas drawer over the content. Same markup, so the nav is
+  // never written twice; only the frame changes.
+  let navOpen = $state(false);
+
+  const asideClass = $derived(
+    [
+      // phone: off-canvas drawer
+      "fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col",
+      "border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+      "transition-transform duration-200",
+      navOpen ? "translate-x-0" : "-translate-x-full",
+      // desktop: back to a static column that animates its width
+      "md:static md:z-auto md:translate-x-0 md:transition-[width]",
+      navCollapsed ? "md:w-16" : "md:w-60",
+    ].join(" "),
+  );
+
+  // A route change means the drawer did its job. Leaving it open would cover the page it just
+  // navigated to.
+  afterNavigate(() => {
+    navOpen = false;
+  });
   const themeLabel = $derived(
     theme.current === "dark" ? t.shell.switchToLight : t.shell.switchToDark,
   );
@@ -359,13 +385,20 @@
 {#if ready}
   {#if showShell}
     <div class="flex h-[100dvh] w-screen overflow-hidden text-foreground">
-      <aside
-        class="flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 {navCollapsed
-          ? 'w-16'
-          : 'w-60'}"
-      >
+      <!-- Scrim: tapping outside the drawer closes it. Phone only — on a desktop the sidebar is
+           part of the layout and there is nothing to dismiss. -->
+      {#if navOpen}
+        <button
+          type="button"
+          class="fixed inset-0 z-40 bg-black/50 md:hidden"
+          aria-label={t.shell.closeMenu}
+          onclick={() => (navOpen = false)}
+        ></button>
+      {/if}
+
+      <aside class={asideClass}>
         <div
-          class="flex h-14 items-center border-b border-sidebar-border {navCollapsed
+          class="flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center border-b border-sidebar-border pt-[env(safe-area-inset-top)] md:h-14 md:pt-0 {navCollapsed
             ? 'justify-center px-0'
             : 'gap-2.5 px-4'}"
         >
@@ -381,7 +414,7 @@
           {:else}
             <SentinelLogo size={24} short />
             <button
-              class="interactive ml-auto rounded-md p-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+              class="interactive ml-auto hidden rounded-md p-1 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground md:block"
               title={t.shell.collapseSidebar}
               aria-label={t.shell.collapseSidebar}
               onclick={toggleNav}
@@ -500,7 +533,7 @@
         {/if}
 
         <div
-          class="border-t border-sidebar-border p-3 text-[11px] text-muted-foreground {navCollapsed
+          class="border-t border-sidebar-border p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-[11px] text-muted-foreground {navCollapsed
             ? 'flex flex-col items-center gap-1'
             : 'flex items-center gap-1.5'}"
         >
@@ -538,6 +571,23 @@
       </aside>
 
       <div class="flex min-w-0 flex-1 flex-col">
+        <!-- Phone-only chrome. The desktop has no top bar and does not need one; the phone has no
+             visible sidebar, so this is the only way in. `pt-[env(safe-area-inset-top)]` keeps it
+             clear of the notch — the viewport is already `viewport-fit=cover`, which puts content
+             under the status bar unless it is padded. -->
+        <div
+          class="flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-3 border-b border-sidebar-border bg-sidebar px-4 pt-[env(safe-area-inset-top)] md:hidden"
+        >
+          <button
+            type="button"
+            class="interactive rounded-md p-1.5 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+            aria-label={t.shell.openMenu}
+            onclick={() => (navOpen = true)}
+          >
+            <Menu class="size-5" />
+          </button>
+          <SentinelLogo size={22} short />
+        </div>
         {#if isAssuming()}
           <div
             class="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-600 dark:text-amber-400"

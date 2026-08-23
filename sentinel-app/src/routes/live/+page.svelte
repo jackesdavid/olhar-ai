@@ -53,6 +53,23 @@
   let videoEl = $state<HTMLVideoElement>();
   let ws: WebSocket | null = null;
   let mediaSource: MediaSource | null = null;
+
+  // iPhone (and any WKWebView) exposes ManagedMediaSource INSTEAD of MediaSource — a variant that
+  // lets the system throttle buffering on a metered link. Same API for what we do with it. Without
+  // this the capability check below fails on every iOS device and Live is dead in the Tauri shell.
+  type MediaSourceCtor = typeof MediaSource;
+  const MSC: MediaSourceCtor | undefined =
+    (window as unknown as { ManagedMediaSource?: MediaSourceCtor }).ManagedMediaSource ??
+    (typeof MediaSource !== "undefined" ? MediaSource : undefined);
+
+  /** ManagedMediaSource drops `streaming` to false to say "stop appending for now" and raises
+   *  `startstreaming` when it wants more. Ignoring it on cellular is what trips the decoder into
+   *  MEDIA_ERR_DECODE and an endless reconnect loop. Undefined (plain MediaSource, or Wi-Fi) reads
+   *  as "always feed" — the previous behaviour, unchanged. */
+  function wantsData(): boolean {
+    const ms = mediaSource as (MediaSource & { streaming?: boolean }) | null;
+    return !!ms && ms.streaming !== false;
+  }
   let sourceBuffer: SourceBuffer | null = null;
   let bufQueue: ArrayBuffer[] = [];
 
@@ -151,7 +168,7 @@
   function probeCodecs(): string {
     const v = ["avc1.640029", "avc1.64002A", "avc1.640033", "avc1.42E01E", "hvc1.1.6.L153.B0"];
     const a = ["mp4a.40.2", "mp4a.40.5", "flac", "opus"];
-    const ok = (mime: string) => "MediaSource" in window && MediaSource.isTypeSupported(mime);
+    const ok = (mime: string) => !!MSC && MSC.isTypeSupported(mime);
     const out = [
       ...v.filter((c) => ok(`video/mp4; codecs="${c}"`)),
       ...a.filter((c) => ok(`audio/mp4; codecs="${c}"`)),
@@ -161,6 +178,7 @@
 
   function flushBuf() {
     if (!sourceBuffer || sourceBuffer.updating || bufQueue.length === 0) return;
+    if (!wantsData()) return;
     try {
       sourceBuffer.appendBuffer(bufQueue.shift()!);
     } catch {
@@ -208,7 +226,7 @@
 
   function startStream(ip: string, reconnecting = false) {
     stopStream();
-    if (!videoEl || !auth.token || !("MediaSource" in window)) {
+    if (!videoEl || !auth.token || !MSC) {
       fail(t.errUnsupportedBrowser);
       return;
     }
@@ -231,8 +249,11 @@
     socket.binaryType = "arraybuffer";
     ws = socket;
 
-    const ms = new MediaSource();
+    const ms = new MSC();
     mediaSource = ms;
+    // ManagedMediaSource REQUIRES the element to opt out of remote playback before the source is
+    // attached — attaching throws otherwise. Harmless on plain MediaSource.
+    videoEl.disableRemotePlayback = true;
     videoEl.src = URL.createObjectURL(ms);
 
     // The handshake must be sent only once BOTH the WebSocket is open AND MediaSource is
@@ -250,6 +271,11 @@
 
     socket.onopen = () => { wsReady = true; maybeHandshake(); };
     ms.addEventListener("sourceopen", () => { msReady = true; maybeHandshake(); });
+    // The other half of the ManagedMediaSource contract. `endstreaming` needs no handler — letting
+    // `streaming` go false is enough, since wantsData() reads it. `startstreaming` means resume,
+    // and without draining here the queue would sit still: nothing else re-enters flushBuf once we
+    // start declining to append.
+    ms.addEventListener("startstreaming", () => flushBuf());
     socket.onmessage = (ev) => {
       if (ws !== socket) return;
       if (typeof ev.data === "string") {
