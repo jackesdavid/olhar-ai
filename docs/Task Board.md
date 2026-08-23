@@ -36,6 +36,10 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #203 Widget + deep link in the Tauri shell
+	  - Plan: [[tauri-widget-and-deeplink]]
+	  - Depends on #202; BLOCKS retiring sentinel-mobile — pinned.ts is what writes the
+	    App Group the widget reads, so the shell needs a Rust write path first.
 - [ ] #201 Faces canvas background — match the workflow editor exactly
 	  - Plan: [[faces-canvas-editor-background]]
 - [ ] #200 Faces: one journey per task, delete means delete, then re-test from zero
