@@ -23,8 +23,7 @@
         "p2": "",
         "p3": "",
         "template": "{p1}"
-      },
-      "memoize": false
+      }
     },
     {
       "id": 2,
@@ -36,8 +35,7 @@
           "alpha",
           "beta"
         ]
-      },
-      "memoize": false
+      }
     },
     {
       "id": 3,
@@ -48,8 +46,7 @@
         "level": "info",
         "message": "took alpha",
         "on_screen": false
-      },
-      "memoize": false
+      }
     },
     {
       "id": 4,
@@ -60,8 +57,7 @@
         "level": "info",
         "message": "took beta",
         "on_screen": false
-      },
-      "memoize": false
+      }
     }
   ],
   "edges": [

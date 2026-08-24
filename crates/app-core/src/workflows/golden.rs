@@ -283,3 +283,22 @@ fn a_switch_takes_the_arm_matching_its_value() {
         "the alpha arm must stay dead: {order:?}"
     );
 }
+
+/// A stored node still carries `"memoize": false` — 249 of them in production the day it was
+/// removed. Serde ignores unknown fields by default, so they load; this asserts that rather than
+/// trusting it, because the failure mode is every graph refusing to open at once.
+#[test]
+fn a_node_saved_before_memoize_was_removed_still_loads() {
+    let stored = serde_json::json!({
+        "id": 3,
+        "kind": "print",
+        "x": 10,
+        "y": 20,
+        "config": { "message": "hi" },
+        "memoize": false
+    });
+    let n: super::domain::GraphNode =
+        serde_json::from_value(stored).expect("a stored node must still deserialize");
+    assert_eq!(n.id, 3);
+    assert_eq!(n.kind, NodeKind::Print);
+}

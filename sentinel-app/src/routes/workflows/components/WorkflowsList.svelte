@@ -42,7 +42,7 @@
     | "SkipIfRunning"
     | { QueueSingle: { max_queued: number } }
     | { Concurrent: { max_concurrent: number } };
-  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
+  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown> };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type VarDecl = {
     name: string;

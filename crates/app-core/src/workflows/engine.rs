@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use crate::workflows::domain::types;
 
 /// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
-/// loop (a `memoize=false` cycle / event storm). Far above any real acyclic graph, so it
+/// loop (an exec cycle / event storm). Far above any real acyclic graph, so it
 /// never trips on a normal DAG. Exceeding it fails the run with a clear error.
 pub const WF_MAX_STEPS: u32 = 10_000;
 
@@ -180,7 +180,7 @@ pub fn on_event_node(
 /// `(from,to)` pairs MINUS the exec back-edges) — so nodes run producer-before-consumer
 /// exactly as `topo_order` did, but loops are possible: an exec back-edge that fires
 /// re-enters its target on the NEXT epoch. `outputs`/`ran` persist across epochs (so
-/// `memoize=true` nodes keep their value); a step + wall-clock budget bounds runaway loops.
+/// a pure node keeps its value); a step + wall-clock budget bounds runaway loops.
 /// `seed_entries` activates natural entry nodes (a normal run); `initial_forced` seeds a
 /// sub-run at a specific node. With no back-edges + entry seeding this is a single epoch
 /// identical to the old behavior.
@@ -485,7 +485,7 @@ fn forward_epoch(
             .filter(|e| e.to == nid && e.to_port == EXEC_IN.name && !back.contains(&(e.from, nid)))
         {
             has_ord_exec = true;
-            if live_out.contains(&(e.from, e.from_port.clone())) {
+            if live_out.contains(&(e.from, e.from_port.to_string())) {
                 fed_live = true;
                 break;
             }
@@ -562,13 +562,13 @@ fn forward_epoch(
                     .and_then(|u| {
                         node::run_node(u.kind, &u.config, &PortValues::new(), sys)
                             .ok()
-                            .and_then(|mut o| o.remove(&edge.from_port))
+                            .and_then(|mut o| o.remove(edge.from_port.as_str()))
                     });
                 if let Some(v) = pure_now {
                     inputs.insert(port.name.to_string(), v);
                     continue;
                 }
-                match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
+                match outputs.get(&edge.from).and_then(|m| m.get(edge.from_port.as_str())) {
                     Some(v) => {
                         inputs.insert(port.name.to_string(), v.clone());
                     }
@@ -597,21 +597,14 @@ fn forward_epoch(
             continue;
         }
 
-        // A node that already ran with memoize ON, re-entered by a loop: reuse its cached
-        // output and STOP (don't re-publish exec) so a memoized loop terminates after one
-        // pass. Warn so the operator knows to turn memoize off to actually iterate.
-        // `ForEach` is exempt — it's the loop DRIVER and must re-run each epoch to advance.
-        if ran.contains(&nid) && n.memoize && n.kind != NodeKind::ForEach {
-            if graph.debug {
-                on_log(
-                    nid,
-                    "memoize on for a node on a loop — it won't iterate (turn memoize off to loop)",
-                    0,
-                );
-            }
-            settle(&mut settled, &mut indeg);
-            continue;
-        }
+        // There is deliberately no "already ran, so skip" branch here. A node reached again by
+        // control flow runs again — that is what being inside a loop means — and a pure node is
+        // pulled once by whoever reads it, which is what fan-out means. The two ways a node can
+        // be reached already draw the distinction correctly, and the `memoize` flag that used to
+        // sit here could only disagree with them: switched on for a looping node it quietly
+        // ended the loop after one pass, and this very block logged a warning telling the
+        // operator to switch it off again. Runaway repetition is bounded by the step budget
+        // below, which reports itself, rather than by a silent skip.
 
         if *steps >= WF_MAX_STEPS {
             return Err(format!(
@@ -1408,7 +1401,7 @@ fn forward_epoch(
             .iter()
             .filter(|e| e.from == nid && e.to_port == EXEC_IN.name && back.contains(&(nid, e.to)))
         {
-            if live_out.contains(&(nid, e.from_port.clone())) && !reentries.contains(&e.to) {
+            if live_out.contains(&(nid, e.from_port.to_string())) && !reentries.contains(&e.to) {
                 reentries.push(e.to);
             }
         }
@@ -1737,34 +1730,16 @@ mod tests {
 
     #[test]
     fn exec_back_edge_loops_until_step_budget() {
-        // A -exec-> B -exec(back)-> A, both memoize=false → infinite loop, bounded by the
+        // A -exec-> B -exec(back)-> A → infinite loop, bounded by the
         // step budget (it must error, not hang).
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
         let a = g.add_node(NodeKind::Format, 0, 0);
         let b = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(a).unwrap().memoize = false;
-        g.node_mut(b).unwrap().memoize = false;
         g.add_edge(a, "exec_out", b, "exec_in").unwrap();
         g.add_edge(b, "exec_out", a, "exec_in").unwrap(); // exec back-edge (allowed)
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("step budget"), "got: {err}");
-    }
-
-    #[test]
-    fn memoized_node_on_a_loop_runs_once_and_does_not_error() {
-        // Same loop but memoize ON (explicit): the re-entered node reuses its output and
-        // stops — the run completes cleanly (warn only), no infinite loop.
-        let ctx = test_ctx();
-        let mut g = Graph::new("loop");
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(a).unwrap().memoize = true;
-        g.node_mut(b).unwrap().memoize = true;
-        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
-        g.add_edge(b, "exec_out", a, "exec_in").unwrap();
-        let outs = run_dag(&g, &ctx).expect("memoized loop must terminate");
-        assert!(outs.contains_key(&a) && outs.contains_key(&b));
     }
 
     #[test]
@@ -1811,7 +1786,7 @@ mod tests {
 
     #[test]
     fn for_each_iterates_in_order_then_fires_completed_once() {
-        // ForEach("a,b,c") → loop_body → Format("{p1}", p1=item, memoize off)
+        // ForEach("a,b,c") → loop_body → Format("{p1}", p1=item)
         //                  → completed → Format("done").
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
@@ -1819,7 +1794,6 @@ mod tests {
         let fe = g.add_node(NodeKind::ForEach, 0, 0);
         g.node_mut(fe).unwrap().config["items"] = json!("a,b,c");
         let body = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(body).unwrap().memoize = false; // re-run each iteration
         g.node_mut(body).unwrap().config["template"] = json!("{p1}");
         let done = g.add_node(NodeKind::Format, 0, 0);
         g.node_mut(done).unwrap().config["template"] = json!("done");
@@ -2071,7 +2045,6 @@ mod tests {
         let mut g = Graph::new("loop");
         let fe = g.add_node(NodeKind::ForEach, 0, 0); // items defaults to ""
         let body = g.add_node(NodeKind::Format, 0, 0);
-        g.node_mut(body).unwrap().memoize = false;
         g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
         let done = g.add_node(NodeKind::Format, 0, 0);
         g.add_edge(fe, "completed", done, "exec_in").unwrap();
@@ -2098,7 +2071,6 @@ mod tests {
         let fe = g.add_node(NodeKind::ForEach, 0, 0);
         g.node_mut(fe).unwrap().config["items"] = json!("[1, 2, 3]");
         let body = g.add_node(NodeKind::Print, 0, 0);
-        g.node_mut(body).unwrap().memoize = false;
         g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
         let (acts, _) = run_capture(&g, &ctx);
         assert_eq!(

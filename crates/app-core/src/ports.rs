@@ -106,7 +106,7 @@ impl FrameSource for LocalFrameSource {
 
 /// agent. Built once per workflow run and held in that run's `ToolContext.frames`, so every
 /// `GetFrame` / `Snapshot` call in the run reuses the **warm** connection and gets a **fresh**
-/// frame each call (a `memoize=false` node in a loop re-grabs without re-setup). Nothing is
+/// frame each call (a node in a loop re-grabs without re-setup). Nothing is
 /// pod-shared, so concurrent runs of different tenants never collide — each targets its own
 /// edge. Dropped when the run ends (connection closed).
 pub struct EdgeFrameSource {

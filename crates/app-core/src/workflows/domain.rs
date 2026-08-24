@@ -81,7 +81,26 @@ pub mod types {
     pub const TRACKED_OBJECT_ARRAY: PortType = PortType::new_static("tracked_object_array");
 }
 
-pub use ggraph_core::{Port, PortName, PortType};
+pub use ggraph_core::{Edge, Port, PortName, PortType};
+
+/// Where the canvas was left. Stays in this product rather than coming from the engine: the
+/// engine has no canvas, and the 40-pixel starting offset below is this editor's house style.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            x: 40.0,
+            y: 40.0,
+            zoom: 1.0,
+        }
+    }
+}
 
 /// A port declaration whose name is owned rather than static, for ports **derived from a node's
 /// config** (the payload ports of `EmitEvent`/`OnEvent`, one per field of the configured event).
@@ -420,7 +439,8 @@ pub enum NodeKind {
     If,
     /// Flow control: iterate a list (text: comma-separated or a JSON array). Fires
     /// `loop_body` once per element (with `item` + `index`), synchronously, then fires
-    /// `completed` once after the last. Body nodes should be memoize=off so they re-run.
+    /// `completed` once after the last. A body node runs on every pass, as being inside a
+    /// loop implies.
     ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
@@ -2062,13 +2082,6 @@ pub struct GraphNode {
     /// Static settings + literal fallbacks for unconnected input ports.
     #[serde(default)]
     pub config: Value,
-    /// Whether this node's output is cached for the duration of a run (default) or
-    /// recomputed every time the node is reached. `true` = today's behavior (runs once,
-    /// reused on fan-out). Set `false` for loop bodies and time-varying sources
-    /// (e.g. `GetCurrentFrame`) so re-activation actually re-runs them. Old graphs
-    /// (no field) deserialize to `true`.
-    #[serde(default = "default_true")]
-    pub memoize: bool,
 }
 
 /// Default grace for a LATE cron fire, in seconds (#cron-node).
@@ -2243,15 +2256,6 @@ pub fn camera_switch_arms(config: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// A typed, directed wire: source node's `from_port` → target node's `to_port`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Edge {
-    pub from: u32,
-    pub from_port: String,
-    pub to: u32,
-    pub to_port: String,
 }
 
 /// How a graph fires **as a whole** — which, since the cron selector landed on `When Event`, is
@@ -2445,25 +2449,6 @@ impl Default for ConcurrencyPolicy {
 // Graph
 // ---------------------------------------------------------------------------
 
-/// The editor's saved camera position — pan offset (px) + zoom — persisted per
-/// graph so re-opening it restores where the operator left off.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Viewport {
-    pub x: f64,
-    pub y: f64,
-    pub zoom: f64,
-}
-
-impl Default for Viewport {
-    fn default() -> Self {
-        Viewport {
-            x: 40.0,
-            y: 40.0,
-            zoom: 1.0,
-        }
-    }
-}
-
 /// One named automation: a trigger + a DAG of typed nodes/edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
@@ -2652,7 +2637,7 @@ impl Graph {
         Some((name, points))
     }
 
-    /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false
+    /// Add a node at (x, y); returns its new id.
     /// (recompute every time) — the user opts in to caching explicitly via the inspector.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
@@ -2663,7 +2648,6 @@ impl Graph {
             x,
             y,
             config: kind.default_config(),
-            memoize: false,
         });
         id
     }
@@ -2771,9 +2755,9 @@ impl Graph {
         }
         self.edges.push(Edge {
             from,
-            from_port: from_port.to_string(),
+            from_port: PortName::new(from_port),
             to,
-            to_port: to_port.to_string(),
+            to_port: PortName::new(to_port),
         });
         Ok(())
     }
@@ -3117,31 +3101,6 @@ mod tests {
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
         assert_eq!(g, g2);
-    }
-
-    #[test]
-    fn memoize_defaults_false_for_new_nodes_and_round_trips() {
-        // New nodes default to memoize=false.
-        let mut g = Graph::new("g");
-        let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(
-            !g.node(n).unwrap().memoize,
-            "new node defaults to memoize=false"
-        );
-
-        // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
-        let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
-        let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(
-            node.memoize,
-            "missing memoize → true (back-compat for pre-memoize nodes)"
-        );
-
-        // memoize=true round-trips.
-        g.node_mut(n).unwrap().memoize = true;
-        let s = serde_json::to_string(&g).unwrap();
-        let g2: Graph = serde_json::from_str(&s).unwrap();
-        assert!(g2.node(n).unwrap().memoize);
     }
 
     #[test]

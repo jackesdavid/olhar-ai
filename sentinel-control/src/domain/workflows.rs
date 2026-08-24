@@ -80,7 +80,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/workflows/:id/nodes/:nid/move", put(move_node))
         .route("/workflows/:id/nodes/:nid/config", put(set_node_config))
-        .route("/workflows/:id/nodes/:nid/memoize", put(set_node_memoize))
         .route("/workflows/:id/edges", post(add_edge))
         .route(
             "/workflows/:id/edges/:idx",
@@ -1496,30 +1495,6 @@ async fn save_graph(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct MemoizeReq {
-    memoize: bool,
-}
-
-async fn set_node_memoize(
-    UserClaims(c): UserClaims,
-    State(st): State<AppState>,
-    Path((id, nid)): Path<(uuid::Uuid, u32)>,
-    Json(b): Json<MemoizeReq>,
-) -> Result<StatusCode, ApiErr> {
-    auth::require(&c, "workflows.write")?;
-    let tid = tenant_of(&c)?;
-    mutate(&st, tid, move |wf| {
-        wf.graph_mut(id)
-            .ok_or("graph not found")?
-            .node_mut(nid)
-            .ok_or("node not found")?
-            .memoize = b.memoize;
-        Ok(())
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
 #[derive(Deserialize)]
 struct AddEdgeReq {
