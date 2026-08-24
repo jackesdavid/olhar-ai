@@ -1,21 +1,44 @@
 # Workflows engine (`sentinel-flow`)
 
 Graph-based automation: a trigger fires a DAG of typed, single-responsibility nodes that runs
-once to completion. The pure domain + engine live in `crates/app-core/src/workflows/`
-(`domain.rs`, `engine.rs`, `node.rs`, `repo.rs`); `sentinel-flow` is the always-on runtime
-(poller + executor + SSE bus); the editor is `sentinel-app/src/routes/workflows/+page.svelte`
-(catalog-driven from control's `GET /workflows/catalog`). Node reference:
-[docs/workflow-nodes.md](../workflow-nodes.md).
+once to completion. `sentinel-flow` is the always-on runtime (poller + executor + SSE bus); the
+editor is `sentinel-app/src/routes/workflows/+page.svelte` (catalog-driven from control's
+`GET /workflows/catalog`). Node reference: [docs/workflow-nodes.md](../workflow-nodes.md).
+
+**The engine is being extracted** into its own public repo — `ggraph-core`,
+[github.com/jackesdavid/graph-engine](https://github.com/jackesdavid/graph-engine) — to be shared
+with a second product. Card **#204**, plan note
+[ggraph-engine-extraction](../plans/ggraph-engine-extraction.md). What already comes from there:
+typed ports (`PortType`, `Port`, `PortName`), `Edge`, the wire-compatibility rule, and the **node
+registry** that the catalog and wire validation read. What is still local:
+`crates/app-core/src/workflows/{engine.rs, node.rs, repo.rs}` — the scheduler, the per-kind
+implementations and the Postgres persistence.
+
+Three things not to rediscover:
+
+- **`ggraph-exec-durable` must not be written.** A continuous scheduler and a durable one differ
+  in one thing — how often the run is committed — and that is `RunOptions.checkpoint`, not a
+  second implementation.
+- **The wire format did not change.** `NodeId` and `PortType` are `#[serde(transparent)]` string
+  newtypes, byte-identical to the enums they replaced.
+- **`is_pure_source` means different things** on the two sides. Here it means "run this even as
+  an orphan entry inside a sub-run" (a seeding rule, from #114/#115). In the engine, `PureSource`
+  means "re-evaluate on every read" (a caching rule). Several kinds are the first without being
+  the second, `get_recipient` among them.
 
 ## Engine
 
 `run_dag_with` → `run_driver` runs **multi-epoch forward Kahn passes** over the ordering edges
 (exec back-edges excluded), settling each node once per epoch. Features:
-- **Per-node memoize** (`GraphNode.memoize`): reuse cached output on re-activation, or re-run.
-  Loop bodies / live sources (`GetCurrentFrame`) want memoize=off. **Event nodes never
-  memoize** (no-op signals) — `add_node` defaults them off + the inspector hides the toggle.
-  (The `PUT /workflows/:id/nodes/:nid/memoize` route was added — it had been missing, so the
-  toggle silently 404'd.)
+- **No memoize flag** (removed, #204). It meant "reuse this node's cached output on
+  re-activation", and the distinction it tried to draw is already made automatically by the two
+  ways a node is reached: control flow reaches an effectful node, and reaching it again means run
+  it again; a pure node is pulled by whoever reads it, once. Switched on for a node in a loop it
+  silently ended the loop after one pass and the engine logged a warning telling the operator to
+  switch it off. Checked in production before removal: 249 nodes had it off, two had it on, and
+  both were in a graph with no cycle, so the flag was never consulted. The field, the endpoint,
+  the editor switch and the i18n strings are all gone; stored graphs still carrying
+  `"memoize": false` load because serde ignores unknown fields (there is a test).
 - **Loops**: exec back-edges allowed (data cycles rejected); bounded by `WF_MAX_STEPS`
   (10_000) + `WF_MAX_RUNTIME` (60s). `ForEach` is the concrete sync loop.
 - **Per-node IO timeouts** (`node::node_timeout`) wrap the `run_node` chokepoint.
@@ -212,6 +235,27 @@ lines only when `graph.debug`). Live `GET /runs` carries run_id/trigger/pod; `GE
 `FLOW_INSTANCE_NAME` → `HOSTNAME` → `"flow"`. `mark_orphaned_runs(pod)` reconciles crashed
 runs at boot. SSE event names: `workflow-run-start|run|node|log|event|print|image`.
 
+## Highlight vs log — two callbacks, and a trap (#115, #205)
+
+The editor's live node highlight and the Console's log line come from **different callbacks**:
+`on_node` and `on_log`. `sentinel-flow` turns `on_node` into the `workflow-node` event the
+editor's highlight controller animates; `on_log` becomes the Console line and the run log.
+
+A pure `GetVariable` activates every epoch, including on branches nobody took. #115 deferred its
+`on_log` so a dead-branch Get stays quiet in the Console — and its comment says the problem is "a
+misleading log line **and canvas highlight**", which it was not fixing. The highlight kept firing
+for two more cards' worth of time.
+
+#205 applies the same rule to `on_node`: a Get's ping is held until a node that **reads** it runs,
+and emitted just before that node — the moment it becomes true that the branch was taken. Two
+details that are easy to get wrong: the log deferral is behind `graph.debug` and the highlight
+must **not** be (a highlight is not a debug feature, and the symptom happens with debug off), and
+both deferrals cover `GetVariable` only — `GetCameraByName` and `GetRecipient` have the same shape
+and are still untreated.
+
+Do **not** "fix" this by removing the unconditional activation of pure sources. Measured: setting
+it to `false` fails three tests, including the #114/#115 one.
+
 ## Camera binding (stable id, not name)
 
 Camera nodes (`CameraSnapshot`, `GetCurrentFrame`) store the **stable device id** (ONVIF
@@ -231,6 +275,35 @@ snapshot-only. If the new kind is really "react to X" rather than "fetch/do X", 
 events** above before reaching for a new node kind at all.
 
 ## Build status
+
+**Engine extraction (#204) — the declaration layer is live (2026-08-24).** Typed ports, `Edge`,
+the wire-compatibility rule and the 91-kind **node registry** all come from `ggraph-core` now, and
+production is serving the registry-backed catalog. Verified in the app by the reporter: one
+`value` pin on `tuya_control` (the one hazard this introduced), switch arms rendering once, old
+graphs opening and saving, runs behaving identically.
+
+The catalog changed on purpose for six kinds — `string_switch`, `ai_switch`, `camera_switch`,
+`get_variable`, `set_variable`, `tuya_control` — which now report the ports they actually have
+instead of an empty static table. That was a real, long-standing design bug: the endpoint read
+`NodeKind::input_ports` (static) while the scheduler read `GraphNode::input_ports`
+(config-aware), so the palette and the engine gave different answers for the same node. One
+answer now. The editor was **appending** its own derived `value` pin to whatever the catalog
+sent for `tuya_control`; it replaces instead, or the fix would have drawn two.
+
+**NOT swapped: the scheduler.** `engine.rs` is 2,621 lines with semantics the three golden graphs
+do not cover — `DelayTrigger` windows, `DeviceGate`, instance scope, event seeding, concurrency
+policy, run logs. It needs its own MR and its own verification, and the strategy to use is a
+differential test: run every real graph shape under both schedulers and require the same node
+sequence. Also still local: `Graph<SentinelMeta>` (a prerequisite for the swap), one-node-per-file
+(cosmetic, 70 functions), and `repo.rs` + the 12 engine-owned migrations.
+
+**The oracles are what made this a mechanical afternoon rather than a gamble.** `check:rust` runs
+`cargo test -p app-core --lib workflows` — before #204 it ran `cargo check --all-targets`, which
+compiles the 118 tests and never runs them, so the engine had no verification at all.
+`catalog_snapshot.json` freezes what every node declares; `workflows/golden/*.json` freezes what
+three graph shapes do, as documents and as execution order. Both caught real problems in this
+work: the snapshot caught `get_recipient` losing its exec pin to an `is_pure_source` misreading,
+and the golden documents caught the engine having an opinion about where a canvas starts.
 
 **Device Gate (#176) — SHIPPED and proven on hardware (2026-08-12).** All three arms fired on a real
 iPhone (approve → Positive, deny → Negative, expiry → Failure), `auth_factor` recorded as
