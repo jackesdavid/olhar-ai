@@ -27,6 +27,11 @@ kanban-plugin: board
 	    rotated from the box at all; MASTER_PASSWORD is deliberately the operator's call.
 - [ ] #197 Disk exhaustion breaks builds, and clean-space can't reclaim the cause
 	  - Plan: [[disk-exhaustion-breaks-everything]]
+	  - clean-space now reclaims the cause: 29 G on this machine, 5.3 GiB → 38 GiB free.
+	    The cause was never Docker — it was 22 G of Xcode symbol/derived caches, which the
+	    old task did not look at. It also reports what it left alone and what is still big.
+	  - REMAINS: nobody is watching. No alert at a low-water mark, so the first symptom is
+	    still a dead pipeline or a shell that cannot run `df`.
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
