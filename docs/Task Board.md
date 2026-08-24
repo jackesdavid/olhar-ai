@@ -26,10 +26,12 @@ kanban-plugin: board
 	    Get Recipient / Get Camera light up (and RUN) on arms nobody took. Two of the four hit
 	    the database. No wrong data flows — the arm's consumers still don't run — but the run
 	    log implies the arm executed.
-	  - The read path at `engine.rs:559` already re-evaluates these on demand, so the
-	    unconditional activation may only be needed for the true-orphan case from #114/#115.
-	  - NEEDS AN ORACLE FIRST: the regression it would reintroduce is a branch silently skipped
-	    as dead while the run reports ok. Add a golden graph for that shape before touching it.
+	  - ROOT CAUSE FOUND: #115 already defers the Console line for a dead-branch Get and works.
+	    The canvas highlight comes from a DIFFERENT callback — `on_node` → `workflow-node` event
+	    → the editor's highlight controller — which has no deferral. Two callbacks, one fix.
+	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
+	    the activation: measured, that fails three tests including the #114/#115 one.
+	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
 
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]

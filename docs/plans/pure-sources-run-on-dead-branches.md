@@ -31,6 +31,43 @@ Mild, but not nothing.
 - **The run log lies by implication.** A reader seeing `get_recipient` in the node list of a run
   reasonably concludes that arm executed.
 
+## Root cause, found (and it is narrower than it looked)
+
+The engine **already** suppresses this — for the Console line only.
+
+`engine.rs:1248-1262` defers a `GetVariable`'s `on_log` into a buffer, and `run_driver` flushes
+it at the end of the run only if a node it feeds actually ran:
+
+```rust
+if n.kind == NodeKind::GetVariable {
+    deferred_get_logs.push((nid, summary, elapsed_ms));   // flushed only if a consumer ran
+} else {
+    on_log(nid, &summary, elapsed_ms);
+}
+```
+
+That is #115, and it works: `get_variable_logs_only_on_the_branch_that_ran` asserts exactly the
+reported behaviour and passes today.
+
+**But the canvas highlight does not come from `on_log`.** It comes from `on_node`, which
+`sentinel-flow/src/engine.rs:273` turns into the `workflow-node` event, which the editor's
+per-node highlight controller listens to (`+page.svelte:817`). `on_node` is called at activation
+time, unconditionally, for every activated node — pure sources included.
+
+So #115 fixed the log and never reached the animation. Two callbacks, one deferral.
+
+**The fix is to defer `on_node` the same way**: buffer it for pure sources at activation and
+emit it under the same "a node it feeds actually ran" condition the logs already use. A Get on a
+dead branch then never pings, rather than pinging and being explained away.
+
+Two things to get right while doing it:
+
+- The log deferral is gated on `graph.debug`; the highlight must not be, because the highlight is
+  not a debug feature.
+- The deferral covers `GetVariable` only — deliberately, per its comment, as the conservative
+  case. `GetCameraByName` and `GetRecipient` have the same shape and were left alone. Whether to
+  widen it is the same question for both callbacks, and should be answered once.
+
 ## The likely fix, and why it needs care
 
 The same scheduler already evaluates a pure source **on demand**, at `engine.rs:559`, when a
@@ -56,11 +93,14 @@ So the narrowing to try is: activate a pure source when it is a **true orphan** 
 edges at all), and otherwise let the read path do the work. That preserves the incident fix and
 stops lighting up arms nobody took.
 
-**Do not fix this blind.** The regression it would reintroduce is silent — a branch skipped as
-dead while the run says `ok` — which is precisely the failure mode that took two cards to find
-the first time. Add a golden graph covering the #114/#115 shape (pure source, no incoming edges,
-required input, sub-run entry) before touching the condition, so the fix has an oracle rather
-than an argument.
+**Do not remove the activation.** Measured, not assumed: setting that branch to `false` and
+running the suite fails three tests, including the #114/#115 one. The activation is load-bearing.
+The bug is in what activation *reports*, not in activation itself — which is why the fix above
+touches `on_node` and leaves the condition alone.
+
+**The oracle now exists.** `workflows::golden` has the #114/#115 shape — a pure source with no
+incoming edges, feeding a required input, entered as a sub-run — plus its negative case. Any
+change here has something to fail against rather than an argument to win.
 
 ## Where to look
 
