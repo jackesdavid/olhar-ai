@@ -6,6 +6,7 @@ use super::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use crate::workflows::domain::{BBox, PortType};
 use serde_json::Value;
+use crate::workflows::domain::types;
 
 /// The variable name selected for this node (`config.variable`).
 fn var_name(config: &Value) -> Result<String, String> {
@@ -27,39 +28,47 @@ fn var_type(config: &Value) -> PortType {
     config
         .get("type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
-        .unwrap_or(PortType::Text)
+        .unwrap_or(types::TEXT)
 }
 
 /// A zero/default value for a variable read before any `Set` ran, so a `Get` never fails the run.
-/// Types with no sensible zero (Image/File/Camera/Person/Face) yield `None` → the output port is
-/// simply left unfilled (a downstream required input then reports the missing value clearly).
+///
+/// Types with no sensible zero — an image, a camera, a face — yield `None`, and the output port
+/// is simply left unfilled. A downstream required input then reports the missing value clearly,
+/// which is better than handing it a blank that looks like a real one.
+///
+/// An if-chain rather than a `match`: a port type is an open string now, not a closed enum, so
+/// there is nothing to match on exhaustively. The trade is that the compiler no longer tells us
+/// when a new type is added — hence the test below, which asserts every type this product
+/// declares is accounted for here one way or the other.
 fn zero_value(ty: PortType) -> Option<PortValue> {
-    Some(match ty {
-        PortType::Text => PortValue::Text(String::new()),
-        PortType::Num => PortValue::Num(0),
-        PortType::Bool => PortValue::Bool(false),
-        PortType::Recipient => PortValue::Recipient(String::new()),
-        PortType::Dictionary => PortValue::Dict(Vec::new()),
-        PortType::TextArray
-        | PortType::NumArray
-        | PortType::PersonArray
-        | PortType::FaceArray => PortValue::List(Vec::new()),
-        PortType::Bbox => PortValue::Bbox(BBox::from_xyxy(0, 0, 0, 0)),
-        PortType::Image
-        | PortType::File
-        | PortType::Person
-        | PortType::Face
-        | PortType::Camera
-        // Table is a reference resolved from sys at run start — no standalone zero.
-        | PortType::Table
-        | PortType::Embedding
-        | PortType::Landmarks
-        | PortType::Region
-        | PortType::TrackedObject
-        | PortType::TrackedObjectArray
-        | PortType::Exec
-        | PortType::Any => return None,
-    })
+    const EMPTY_LISTS: [PortType; 4] = [
+        types::TEXT_ARRAY,
+        types::NUM_ARRAY,
+        types::PERSON_ARRAY,
+        types::FACE_ARRAY,
+    ];
+
+    if ty == types::TEXT {
+        Some(PortValue::Text(String::new()))
+    } else if ty == types::NUM {
+        Some(PortValue::Num(0))
+    } else if ty == types::BOOL {
+        Some(PortValue::Bool(false))
+    } else if ty == types::RECIPIENT {
+        Some(PortValue::Recipient(String::new()))
+    } else if ty == types::DICTIONARY {
+        Some(PortValue::Dict(Vec::new()))
+    } else if EMPTY_LISTS.contains(&ty) {
+        Some(PortValue::List(Vec::new()))
+    } else if ty == types::BBOX {
+        Some(PortValue::Bbox(BBox::from_xyxy(0, 0, 0, 0)))
+    } else {
+        // Image, File, Person, Face, Camera, Embedding, Landmarks, Region, TrackedObject and its
+        // array, Exec, Any — and Table, which is a reference resolved from `sys` at run start
+        // and so has no standalone zero either.
+        None
+    }
 }
 
 /// Read the variable's current value (or its type-zero default if never set) → `value` output.
@@ -117,7 +126,7 @@ fn multi_var_type(config: &Value, name: &str) -> PortType {
         .find(|e| e.get("name").and_then(|v| v.as_str()).map(str::trim) == Some(name))
         .and_then(|e| e.get("type").cloned())
         .and_then(|t| serde_json::from_value::<PortType>(t).ok())
-        .unwrap_or(PortType::Text)
+        .unwrap_or(types::TEXT)
 }
 
 /// Write every WIRED input into its variable. Exec passes through.

@@ -3,7 +3,7 @@
 //! (`columns`: ordered `{name, ty}` where `ty ∈ Text|Num|Bool`) and `rows` (each an ordered list
 //! of cells, positionally typed by the schema).
 //!
-//! First-class + reusable: a workflow variable of `PortType::Table` references a dictionary by id,
+//! First-class + reusable: a workflow variable of `types::TABLE` references a dictionary by id,
 //! so an edit here reaches every workflow reading it. Nodes read and **mutate** rows mid-run; the
 //! mutators are made atomic + thread-safe across concurrent runs/pods by taking a
 //! `SELECT … FOR UPDATE` lock on the dictionary's single row before rewriting `rows`.
