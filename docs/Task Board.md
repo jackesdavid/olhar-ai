@@ -20,6 +20,17 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #205 Pure sources activate on dead branches — the canvas is telling the truth
+	  - Plan: [[pure-sources-run-on-dead-branches]]
+	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
+	    Get Recipient / Get Camera light up (and RUN) on arms nobody took. Two of the four hit
+	    the database. No wrong data flows — the arm's consumers still don't run — but the run
+	    log implies the arm executed.
+	  - The read path at `engine.rs:559` already re-evaluates these on demand, so the
+	    unconditional activation may only be needed for the true-orphan case from #114/#115.
+	  - NEEDS AN ORACLE FIRST: the regression it would reintroduce is a branch silently skipped
+	    as dead while the run reports ok. Add a golden graph for that shape before touching it.
+
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]
 	  - Was missing from the board entirely while the plan still listed it open (P0).
