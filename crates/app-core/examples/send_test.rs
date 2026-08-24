@@ -21,7 +21,10 @@ fn main() {
         templates::Lang::En,
     );
     match email::send(&mail) {
-        Ok(()) => println!("accepted by the provider → {to} | subject: {}", mail.subject),
+        Ok(()) => println!(
+            "accepted by the provider → {to} | subject: {}",
+            mail.subject
+        ),
         Err(e) => {
             eprintln!("FAILED: {e}");
             std::process::exit(1);

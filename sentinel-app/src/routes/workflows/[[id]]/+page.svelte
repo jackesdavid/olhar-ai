@@ -1309,7 +1309,9 @@
     // (adaptive widget) is the unwired fallback. Mirrors Set Variable.
     if (node.kind === "tuya_control") {
       const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "bool") as CatPort["type"];
-      return { ...k, inputs: [...k.inputs, { name: "value", type: ty, required: false }] };
+      // Replace rather than append: the catalog already declares `value` for the default
+      // value_type, and this override is the same port typed by THIS node's config.
+      return { ...k, inputs: [...k.inputs.filter((p) => p.name !== "value"), { name: "value", type: ty, required: false }] };
     }
     // Read Tuya Status: the `value` output is typed by the selected data point (like the control
     // node's input), so a read wires straight into the right type; `on`/`raw` stay static.
@@ -1341,7 +1343,8 @@
       const colPorts: CatPort[] = cols
         .filter((c) => c && String(c.name).trim())
         .map((c) => ({ name: String(c.name), type: (c.type ?? "text") as CatPort["type"], required: false }));
-      return { ...k, inputs: [...k.inputs, ...colPorts] };
+      const colNames = new Set(colPorts.map((p) => p.name));
+      return { ...k, inputs: [...k.inputs.filter((p) => !colNames.has(p.name)), ...colPorts] };
     }
     // AI Extract: `value` output typed per config.type (so it wires straight into Camera/Notify) + found.
     if (node.kind === "ai_extract") {

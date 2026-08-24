@@ -32,9 +32,9 @@ use base64::Engine as _;
 use super::domain::{NodeKind, Port, PortType};
 use crate::agent::tools::ToolContext;
 use crate::device_actions as dev_actions;
+use crate::workflows::domain::types;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::workflows::domain::types;
 
 /// A file value: raw bytes plus the filename and MIME used for multipart uploads.
 #[derive(Debug, Clone)]
@@ -1447,9 +1447,9 @@ pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::workflows::domain::PortName;
     use super::super::domain::NodeKind;
     use super::*;
+    use crate::workflows::domain::PortName;
     use serde_json::json;
 
     fn resolved(
@@ -1518,7 +1518,6 @@ mod tests {
 
     #[test]
     fn parse_variable_value_matches_default_seeding() {
-        use crate::workflows::domain::PortType;
         let sys = test_ctx();
         // The types a manual-run input can carry — parsed identically to a stored default.
         assert!(
@@ -1842,10 +1841,7 @@ mod tests {
     #[test]
     fn current_frame_summary_reports_the_size_it_actually_returned() {
         let mut outputs = PortValues::new();
-        outputs.insert(
-            "image".to_string(),
-            PortValue::Image(vec![0u8; 40 * 1024]),
-        );
+        outputs.insert("image".to_string(), PortValue::Image(vec![0u8; 40 * 1024]));
         outputs.insert("age_ms".to_string(), PortValue::Num(0));
         let s = debug_summary(
             NodeKind::GetCurrentFrame,

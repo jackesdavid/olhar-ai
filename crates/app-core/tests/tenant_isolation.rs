@@ -71,7 +71,9 @@ fn vector(seed: u64) -> Vec<f32> {
     let mut x = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     let mut v = Vec::with_capacity(DIM);
     for i in 0..DIM {
-        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        x = x
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         // A large shared component plus a small per-seed wobble → all vectors near-parallel.
         let wobble = ((x >> 33) as f64 / (1u64 << 31) as f64) as f32 - 0.5;
         v.push(1.0 + 0.02 * wobble * (i % 7) as f32);
@@ -214,8 +216,7 @@ fn negative_control_a_query_without_the_tenant_predicate_sees_both() {
                 .await
                 .expect("control query")
         });
-        let sources: std::collections::HashSet<&str> =
-            rows.iter().map(|(s,)| s.as_str()).collect();
+        let sources: std::collections::HashSet<&str> = rows.iter().map(|(s,)| s.as_str()).collect();
         assert!(
             sources.contains("iso-A") && sources.contains("iso-B"),
             "the fixtures do not overlap across tenants (saw {sources:?}) — every isolation \
@@ -408,12 +409,14 @@ async fn setup_probe(pool: &PgPool, a: uuid::Uuid, b: uuid::Uuid) {
         sqlx::query(&stmt).execute(pool).await.expect(&stmt);
     }
     for (t, note) in [(a, "belongs to A"), (b, "belongs to B")] {
-        sqlx::query(&format!("INSERT INTO {PROBE_TABLE} (tenant_id, note) VALUES ($1, $2)"))
-            .bind(t)
-            .bind(note)
-            .execute(pool)
-            .await
-            .expect("seed probe");
+        sqlx::query(&format!(
+            "INSERT INTO {PROBE_TABLE} (tenant_id, note) VALUES ($1, $2)"
+        ))
+        .bind(t)
+        .bind(note)
+        .execute(pool)
+        .await
+        .expect("seed probe");
     }
 }
 
@@ -440,7 +443,9 @@ async fn probe_pool(url: &str) -> PgPool {
 
 #[test]
 fn rls_does_nothing_for_a_superuser_or_owner_which_is_the_whole_trap() {
-    let Some((_db, pool, rt, f)) = setup() else { return };
+    let Some((_db, pool, rt, f)) = setup() else {
+        return;
+    };
     rt.block_on(async {
         setup_probe(&pool, f.a, f.b).await;
 
@@ -469,8 +474,12 @@ fn rls_does_nothing_for_a_superuser_or_owner_which_is_the_whole_trap() {
 
 #[test]
 fn rls_isolates_a_non_owner_role_and_fails_closed_without_the_session_variable() {
-    let Ok(url) = std::env::var("TEST_DATABASE_URL") else { return };
-    let Some((_db, pool, rt, f)) = setup() else { return };
+    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        return;
+    };
+    let Some((_db, pool, rt, f)) = setup() else {
+        return;
+    };
     rt.block_on(async {
         setup_probe(&pool, f.a, f.b).await;
         for stmt in [
@@ -514,7 +523,10 @@ fn rls_isolates_a_non_owner_role_and_fails_closed_without_the_session_variable()
             .await
             .expect("scoped update")
             .rows_affected();
-        assert_eq!(touched, 1, "an unqualified UPDATE touched {touched} rows, not 1");
+        assert_eq!(
+            touched, 1,
+            "an unqualified UPDATE touched {touched} rows, not 1"
+        );
         tx.commit().await.expect("commit");
 
         // 4. Tenant B's row is untouched, proven from the owner connection which sees everything.

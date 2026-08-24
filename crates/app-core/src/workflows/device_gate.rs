@@ -519,13 +519,15 @@ pub fn pending_for_device(db: &Db, push_device_id: Uuid) -> Vec<PendingRequest> 
     match res {
         Ok(rows) => rows
             .into_iter()
-            .map(|(id, prompt, flow_name, created_at, expires_at)| PendingRequest {
-                id,
-                prompt,
-                flow_name,
-                created_at,
-                expires_at,
-            })
+            .map(
+                |(id, prompt, flow_name, created_at, expires_at)| PendingRequest {
+                    id,
+                    prompt,
+                    flow_name,
+                    created_at,
+                    expires_at,
+                },
+            )
             .collect(),
         Err(e) => {
             log::error!("device_gate pending list failed: {e}");

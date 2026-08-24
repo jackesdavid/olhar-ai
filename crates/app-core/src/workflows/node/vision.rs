@@ -340,7 +340,11 @@ pub(super) fn run_recognize_face(
             o.insert("samples".into(), PortValue::Num(m.n as i64));
             o.insert(
                 "margin".into(),
-                PortValue::Num(second.map_or(100, |d| conf_pct(m.best) - conf_pct(d)).max(0)),
+                PortValue::Num(
+                    second
+                        .map_or(100, |d| conf_pct(m.best) - conf_pct(d))
+                        .max(0),
+                ),
             );
             o.insert("ambiguous".into(), PortValue::Bool(ambiguous));
             // On an ambiguous result the identity is still reported — a graph may want to show
@@ -364,7 +368,10 @@ pub(super) fn run_recognize_face(
                 "consistency".into(),
                 PortValue::Num(nearest.map_or(0, |m| conf_pct(m.mean_top3))),
             );
-            o.insert("samples".into(), PortValue::Num(nearest.map_or(0, |m| m.n as i64)));
+            o.insert(
+                "samples".into(),
+                PortValue::Num(nearest.map_or(0, |m| m.n as i64)),
+            );
             o.insert("margin".into(), PortValue::Num(0));
             o.insert("ambiguous".into(), PortValue::Bool(false));
             o.insert("person".into(), PortValue::Text(String::new()));
@@ -406,9 +413,13 @@ pub(super) fn run_store_face(
     // invisible to threshold calibration (#128). The fail-open sentinel control substitutes for an
     // edge too old to measure sharpness is mapped back to NULL here for the same reason — it means
     // "unknown", and must not enter the data as an excellent score.
-    let quality = |name: &str| inputs.get(name).and_then(PortValue::as_num).map(|v| v as f32);
-    let blur = quality("blur")
-        .filter(|b| (*b as f64) < crate::agent::face_quality::BLUR_UNKNOWN);
+    let quality = |name: &str| {
+        inputs
+            .get(name)
+            .and_then(PortValue::as_num)
+            .map(|v| v as f32)
+    };
+    let blur = quality("blur").filter(|b| (*b as f64) < crate::agent::face_quality::BLUR_UNKNOWN);
     let (yaw, pitch, roll) = (quality("yaw"), quality("pitch"), quality("roll"));
 
     let dedup = cfg_f64(config, "dedup_distance", 0.15) as f32;

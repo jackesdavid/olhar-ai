@@ -149,7 +149,8 @@ impl EdgeFrameSource {
     fn sse_snapshot(&self, ip: &str) -> Option<Result<Vec<u8>, String>> {
         let (db, tenant) = self.sse.as_ref()?;
         let path = format!("/snapshot/{ip}");
-        let res = crate::edge_commands::edge_http_via_sse_blocking(db, *tenant, "GET", &path, None, 15)?;
+        let res =
+            crate::edge_commands::edge_http_via_sse_blocking(db, *tenant, "GET", &path, None, 15)?;
         Some(match res {
             Ok((status, body)) if (200..300).contains(&status) => Ok(body),
             Ok((status, _)) => Err(format!("edge snapshot returned {status}")),
@@ -159,9 +160,11 @@ impl EdgeFrameSource {
 }
 /// Bases whose edge API (`:8080/snapshot`) we've already found unreachable — so a box without the
 /// direct serve (older edge) pays the probe timeout **once per process**, not on every frame grab.
-fn edge_api_dead() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
-    static D: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-        std::sync::OnceLock::new();
+fn edge_api_dead(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static D: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    > = std::sync::OnceLock::new();
     D.get_or_init(Default::default)
 }
 

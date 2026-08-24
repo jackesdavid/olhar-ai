@@ -2106,7 +2106,23 @@
         }
       ],
       "label": "Text Switch",
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "arm_1",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "arm_2",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "default",
+          "required": false,
+          "type": "exec"
+        }
+      ],
       "slug": "string_switch"
     },
     {
@@ -2127,7 +2143,13 @@
         }
       ],
       "label": "Camera Switch",
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "default",
+          "required": false,
+          "type": "exec"
+        }
+      ],
       "slug": "camera_switch"
     },
     {
@@ -2484,7 +2506,13 @@
       },
       "inputs": [],
       "label": "Get Variable",
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        }
+      ],
       "slug": "get_variable"
     },
     {
@@ -2498,6 +2526,11 @@
           "name": "exec_in",
           "required": false,
           "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "text"
         }
       ],
       "label": "Set Variable",
@@ -2703,7 +2736,23 @@
         }
       ],
       "label": "AI Switch",
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "arm_1",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "arm_2",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "default",
+          "required": false,
+          "type": "exec"
+        }
+      ],
       "slug": "ai_switch"
     },
     {
@@ -3149,6 +3198,11 @@
           "name": "exec_in",
           "required": false,
           "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "bool"
         }
       ],
       "label": "Control Tuya Device",

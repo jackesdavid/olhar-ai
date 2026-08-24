@@ -15,10 +15,10 @@ use super::node::{self, PortValue, PortValues};
 use super::repo;
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 
+use crate::workflows::domain::types;
 use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
-use crate::workflows::domain::types;
 
 /// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
 /// loop (an exec cycle / event storm). Far above any real acyclic graph, so it
@@ -568,7 +568,10 @@ fn forward_epoch(
                     inputs.insert(port.name.to_string(), v);
                     continue;
                 }
-                match outputs.get(&edge.from).and_then(|m| m.get(edge.from_port.as_str())) {
+                match outputs
+                    .get(&edge.from)
+                    .and_then(|m| m.get(edge.from_port.as_str()))
+                {
                     Some(v) => {
                         inputs.insert(port.name.to_string(), v.clone());
                     }
@@ -580,7 +583,8 @@ fn forward_epoch(
                 }
             } else if port.ty == types::CAMERA {
                 // Camera literals require device resolution — handled here where sys is available.
-                if let Some(cam) = node::resolve_camera_literal(&n.config, port.name.as_str(), sys) {
+                if let Some(cam) = node::resolve_camera_literal(&n.config, port.name.as_str(), sys)
+                {
                     inputs.insert(port.name.to_string(), cam);
                 }
             } else if port.ty == types::TABLE {
@@ -588,7 +592,9 @@ fn forward_epoch(
                 if let Some(t) = node::resolve_table_literal(&n.config, port.name.as_str(), sys) {
                     inputs.insert(port.name.to_string(), t);
                 }
-            } else if let Some(lit) = node::literal_for_named(&n.config, port.name.as_str(), port.ty.clone()) {
+            } else if let Some(lit) =
+                node::literal_for_named(&n.config, port.name.as_str(), port.ty.clone())
+            {
                 inputs.insert(port.name.to_string(), lit);
             }
         }
@@ -1056,9 +1062,7 @@ fn forward_epoch(
                     };
                     o.insert(
                         "answered_by".into(),
-                        PortValue::Text(carried(
-                            crate::workflows::domain::DEVICE_GATE_ANSWERED_BY,
-                        )),
+                        PortValue::Text(carried(crate::workflows::domain::DEVICE_GATE_ANSWERED_BY)),
                     );
                     o.insert(
                         "factor".into(),
@@ -1520,7 +1524,6 @@ impl WorkflowEngine {
     pub fn alert_seen_max(&self, tenant: uuid::Uuid) -> u64 {
         self.alert_seen_max.get(&tenant).copied().unwrap_or(0)
     }
-
 }
 
 #[cfg(test)]
@@ -1611,7 +1614,7 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
-        
+
             ..Default::default()
         };
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -2501,7 +2504,7 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
-        
+
             ..Default::default()
         };
         let cam_b = Device {
@@ -2516,7 +2519,7 @@ mod tests {
             rtsp_url: None,
             rtsp_sub_url: None,
             stream_mode: None,
-        
+
             ..Default::default()
         };
         let (tx, _rx) = std::sync::mpsc::channel();

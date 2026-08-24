@@ -259,7 +259,10 @@ fn a_loop_runs_its_body_once_per_item_then_completes() {
     let order = run_order(&g);
     // 1 = for_each, 2 = print(body), 3 = print(done)
     let body = order.iter().filter(|id| **id == 2).count();
-    assert_eq!(body, 3, "three items must run the body three times: {order:?}");
+    assert_eq!(
+        body, 3,
+        "three items must run the body three times: {order:?}"
+    );
     let done = order.iter().filter(|id| **id == 3).count();
     assert_eq!(done, 1, "completed must fire exactly once: {order:?}");
     assert_eq!(

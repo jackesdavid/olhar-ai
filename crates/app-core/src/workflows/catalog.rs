@@ -14,59 +14,22 @@
 //! The projection itself is unchanged from the handler it replaced — same keys, same order,
 //! same `is_pure()` rule for omitting the exec pins.
 
-use super::domain::{NodeKind, Port, EXEC_IN};
-use serde_json::{json, Value};
+use serde_json::Value;
 
-fn ports(list: &[Port]) -> Vec<Value> {
-    list.iter()
-        .map(|p| {
-            json!({
-                "name": p.name,
-                "type": p.ty.as_str(),
-                "required": p.required,
-            })
-        })
-        .collect()
-}
-
-fn with_exec(exec: &[Port], list: &[Port]) -> Vec<Value> {
-    let mut v = ports(exec);
-    v.extend(ports(list));
-    v
-}
-
-/// One entry per user-visible node kind (`NodeKind::ALL`), in declaration order.
+/// One entry per user-visible node kind, in registration order.
+///
+/// Served from the engine's registry rather than from a `match` over the enum: the registry is
+/// where a node's declaration lives now, and two places to read a node's ports from is exactly
+/// how this endpoint and the scheduler came to disagree about the eight kinds whose ports depend
+/// on their configuration.
 pub fn catalog_json() -> Value {
-    let exec_in = [EXEC_IN];
-    let kinds = NodeKind::ALL
-        .iter()
-        .map(|k| {
-            // Pure data/logic nodes have no exec pins — omit exec_in/exec_out entirely so the UI
-            // can hide the exec circles and the engine knows to pull them.
-            let (inputs, outputs) = if k.is_pure() {
-                (ports(k.input_ports()), ports(k.output_ports()))
-            } else {
-                (
-                    with_exec(&exec_in, k.input_ports()),
-                    with_exec(k.exec_out_ports(), k.output_ports()),
-                )
-            };
-            json!({
-                "slug": k.slug(),
-                "label": k.label(),
-                "category": k.category(),
-                "inputs": inputs,
-                "outputs": outputs,
-                "default_config": k.default_config(),
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({ "kinds": kinds })
+    super::registry::registry().catalog_json()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflows::domain::NodeKind;
 
     /// The committed shape of the catalog. Regenerate deliberately, never casually:
     ///
