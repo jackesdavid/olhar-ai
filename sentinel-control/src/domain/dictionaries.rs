@@ -11,7 +11,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use app_core::dictionaries::{self, Column, Dictionary};
-use app_core::workflows::{self, domain::PortType};
+use app_core::workflows::{self, domain::types};
 
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
@@ -118,7 +118,7 @@ fn referencing_workflows(db: &app_core::db::Db, tid: Uuid, dict_id: Uuid) -> Vec
         .filter(|g| {
             g.variables
                 .iter()
-                .any(|v| v.ty == PortType::Table && v.default.as_deref() == Some(needle.as_str()))
+                .any(|v| v.ty == types::TABLE && v.default.as_deref() == Some(needle.as_str()))
         })
         .map(|g| g.name)
         .collect()

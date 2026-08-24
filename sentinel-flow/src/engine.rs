@@ -251,7 +251,7 @@ fn execute_run(
         for decl in &graph.variables {
             if let Some(raw) = input_overrides.get(&decl.name) {
                 if let Some(pv) =
-                    app_core::workflows::node::parse_variable_value(decl.ty, raw, &ctx)
+                    app_core::workflows::node::parse_variable_value(decl.ty.clone(), raw, &ctx)
                 {
                     ctx.variables.lock().unwrap().insert(decl.name.clone(), pv);
                 }

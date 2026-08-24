@@ -8,7 +8,7 @@
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
 use super::domain::{
-    camera_switch_arms, string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, PortType, EXEC_IN,
+    camera_switch_arms, string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, EXEC_IN,
     WINDOW_STOP_MARKER,
 };
 use super::node::{self, PortValue, PortValues};
@@ -18,6 +18,7 @@ use crate::agent::tools::{ToolContext, ToolUiEvent};
 use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use crate::workflows::domain::types;
 
 /// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
 /// loop (a `memoize=false` cycle / event storm). Far above any real acyclic graph, so it
@@ -564,12 +565,12 @@ fn forward_epoch(
                             .and_then(|mut o| o.remove(&edge.from_port))
                     });
                 if let Some(v) = pure_now {
-                    inputs.insert(port.name.clone(), v);
+                    inputs.insert(port.name.to_string(), v);
                     continue;
                 }
                 match outputs.get(&edge.from).and_then(|m| m.get(&edge.from_port)) {
                     Some(v) => {
-                        inputs.insert(port.name.clone(), v.clone());
+                        inputs.insert(port.name.to_string(), v.clone());
                     }
                     None if port.required && !outputs.contains_key(&edge.from) => {
                         dead = true;
@@ -577,18 +578,18 @@ fn forward_epoch(
                     }
                     None => {}
                 }
-            } else if port.ty == PortType::Camera {
+            } else if port.ty == types::CAMERA {
                 // Camera literals require device resolution — handled here where sys is available.
-                if let Some(cam) = node::resolve_camera_literal(&n.config, &port.name, sys) {
-                    inputs.insert(port.name.clone(), cam);
+                if let Some(cam) = node::resolve_camera_literal(&n.config, port.name.as_str(), sys) {
+                    inputs.insert(port.name.to_string(), cam);
                 }
-            } else if port.ty == PortType::Table {
+            } else if port.ty == types::TABLE {
                 // Table literals resolve a dictionary id against the run-start snapshot (needs sys).
-                if let Some(t) = node::resolve_table_literal(&n.config, &port.name, sys) {
-                    inputs.insert(port.name.clone(), t);
+                if let Some(t) = node::resolve_table_literal(&n.config, port.name.as_str(), sys) {
+                    inputs.insert(port.name.to_string(), t);
                 }
-            } else if let Some(lit) = node::literal_for_named(&n.config, &port.name, port.ty) {
-                inputs.insert(port.name.clone(), lit);
+            } else if let Some(lit) = node::literal_for_named(&n.config, port.name.as_str(), port.ty.clone()) {
+                inputs.insert(port.name.to_string(), lit);
             }
         }
         if dead {
@@ -1531,7 +1532,7 @@ impl WorkflowEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::super::domain::{Graph, NodeKind, PortType};
+    use super::super::domain::{Graph, NodeKind};
     use super::*;
     use crate::agent::detector::{PersonDetection, PersonResult};
     use crate::ports::Vision;
@@ -2283,11 +2284,11 @@ mod tests {
         // EmitEvent gains a Text INPUT port "msg"; OnEvent a Text OUTPUT port "msg".
         assert_eq!(
             g.node(em).unwrap().input_port("msg").unwrap().ty,
-            PortType::Text
+            types::TEXT
         );
         assert_eq!(
             g.node(on).unwrap().output_port("msg").unwrap().ty,
-            PortType::Text
+            types::TEXT
         );
 
         // The dynamic ports wire by type: Format.text → EmitEvent.msg, OnEvent.msg → Format.p1.

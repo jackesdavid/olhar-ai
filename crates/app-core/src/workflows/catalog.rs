@@ -22,7 +22,7 @@ fn ports(list: &[Port]) -> Vec<Value> {
         .map(|p| {
             json!({
                 "name": p.name,
-                "type": serde_json::to_value(p.ty).unwrap_or(Value::Null),
+                "type": p.ty.as_str(),
                 "required": p.required,
             })
         })
