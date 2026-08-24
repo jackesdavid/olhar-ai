@@ -20,7 +20,7 @@ kanban-plugin: board
 
 ## Bugs
 
-- [ ] #205 Pure sources activate on dead branches — the canvas is telling the truth
+- [x] #205 Pure sources activate on dead branches — the canvas is telling the truth
 	  - Plan: [[pure-sources-run-on-dead-branches]]
 	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
 	    Get Recipient / Get Camera light up (and RUN) on arms nobody took. Two of the four hit
@@ -32,6 +32,9 @@ kanban-plugin: board
 	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
 	    the activation: measured, that fails three tests including the #114/#115 one.
 	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
+	  - FIXED: a Get's `on_node` is held until a node that READS it runs, and emitted just
+	    before that node. A Get whose readers all sat out never pings. Proven by reverting the
+	    fix and watching the new test fail on the exact node id.
 
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]

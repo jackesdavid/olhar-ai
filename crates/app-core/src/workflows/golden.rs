@@ -410,3 +410,62 @@ fn the_orphan_source_is_read_at_the_moment_its_consumer_runs() {
         "the variable says `other`, so the `hello` arm must stay dead: {order:?}"
     );
 }
+
+/// The canvas highlight must follow the branch that ran, not every branch.
+///
+/// #115 fixed this for the Console line and stopped there, because the log and the highlight
+/// come from different callbacks — `on_log` and `on_node` — and only the first was deferred.
+/// The reported symptom (#205) was every `Get Variable` in a two-armed graph lighting up when
+/// one arm ran.
+///
+/// Asserted against `on_node`, which is what `sentinel-flow` turns into the `workflow-node`
+/// event the editor animates. Deliberately with `debug` OFF: a highlight is not a debug feature,
+/// and the log deferral is gated on debug, so a test that left it on would pass for the wrong
+/// reason.
+#[test]
+fn only_the_get_on_the_live_branch_lights_up() {
+    let mut g = graph("golden: two arms, two gets", 5);
+    g.debug = false;
+
+    let gate = g.add_node(NodeKind::If, 0, 0);
+    cfg(&mut g, gate, json!({ "condition": false }));
+
+    let get_dead = g.add_node(NodeKind::GetVariable, 0, -120);
+    cfg(&mut g, get_dead, json!({ "variable": "a", "type": "text" }));
+    let fmt_dead = g.add_node(NodeKind::Format, 250, -120);
+    cfg(
+        &mut g,
+        fmt_dead,
+        json!({ "template": "{p1}", "p1": "", "p2": "", "p3": "" }),
+    );
+
+    let get_live = g.add_node(NodeKind::GetVariable, 0, 120);
+    cfg(&mut g, get_live, json!({ "variable": "b", "type": "text" }));
+    let fmt_live = g.add_node(NodeKind::Format, 250, 120);
+    cfg(
+        &mut g,
+        fmt_live,
+        json!({ "template": "{p1}", "p1": "", "p2": "", "p3": "" }),
+    );
+
+    wire(&mut g, gate, "true", fmt_dead, "exec_in");
+    wire(&mut g, get_dead, "value", fmt_dead, "p1");
+    wire(&mut g, gate, "false", fmt_live, "exec_in");
+    wire(&mut g, get_live, "value", fmt_live, "p1");
+
+    let order = run_order(&g);
+
+    assert!(
+        order.contains(&get_live),
+        "the Get feeding the arm that ran must light up: {order:?}"
+    );
+    assert!(
+        !order.contains(&get_dead),
+        "the Get on the arm nobody took must NOT light up — this is #205, and it is what a \
+         person sees on the canvas: {order:?}"
+    );
+    assert!(
+        order.iter().position(|n| *n == get_live) < order.iter().position(|n| *n == fmt_live),
+        "and it must light up BEFORE the node that reads it, not at the end of the run: {order:?}"
+    );
+}
