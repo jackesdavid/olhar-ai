@@ -146,6 +146,12 @@ kanban-plugin: board
 	  - Fase 0 (o oráculo) FEITA: `check:rust` agora RODA os 118 testes da engine, que antes eram
 	    só compilados; mais o snapshot do catálogo e os grafos-ouro. Sem isso o refactor não
 	    tinha rede nenhuma.
+	  - Fase 1 FEITA: o core roda grafos. 21 nós (um por arquivo), 117 testes, os dois guardas
+	    de agnosticismo no CI. Inclui o checkpoint durável, que era o maior risco da fase.
+	  - Achado que muda o plano: exec-stream e exec-durable NÃO são dois crates — é um
+	    scheduler e um enum de política. Ver a nota.
+	  - PRÓXIMO: Fase 2 no bishop — um nó por arquivo + registry, in place, uma família por MR,
+	    com o snapshot do catálogo byte-idêntico depois de cada uma.
 
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]

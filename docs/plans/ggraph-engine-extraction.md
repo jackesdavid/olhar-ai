@@ -509,3 +509,66 @@ Fim a fim, depois da Fase 6: subir o `sentinel-flow` em staging, disparar um gra
 com `if` + `for_each` + `delay_trigger`, conferir o histórico do run e as linhas de log; e no
 `ggraph`, rodar os dois grafos de exemplo (um contínuo, um durável) que servem de documentação
 executável e de detector de regressão de agnosticismo.
+
+
+---
+
+# Registro: o que a Fase 1 mudou no plano (2026-08-24)
+
+O `ggraph-core` existe e roda grafos de verdade —
+[github.com/jackesdavid/graph-engine](https://github.com/jackesdavid/graph-engine), 21 nós,
+117 testes, clippy limpo, os dois guardas de agnosticismo do §16.4 rodando no CI. Três coisas
+que este plano dizia e que o código desmentiu.
+
+## 1. Não são dois schedulers. É um scheduler e uma política.
+
+O §5.5 apostava nisso e a aposta se confirmou mais forte do que estava escrito. `graph-exec-stream`
+e `graph-exec-durable` diferem em **uma** coisa, e não é a ordenação dos nós: é com que frequência
+o run é gravado.
+
+```rust
+RunOptions::default()   // Checkpoint::None      — nada gravado durante o run
+RunOptions::durable()   // Checkpoint::EveryNode — cada nó gravado ao completar
+```
+
+A alternativa era duas cópias do laço de épocas, da regra de ramo morto e da semântica de pull,
+divergindo em silêncio. **O crate `ggraph-exec-durable` não existe e não deve existir.**
+
+Três regras caíram de escrever isso, cada uma um bug se fosse ao contrário:
+
+- Run novo **nunca** é semeado com sobras de um run suspenso — valores velhos pareceriam vivos e
+  ressuscitariam ramos que a engine deixou mortos de propósito.
+- O nó reentrado **não** é restaurado. Uma retomada entrega algo *ao* nó que esperava; devolver a
+  ele o estado que tinha antes de perguntar é o oposto do que ele precisa.
+- Run que termina limpa os próprios checkpoints. No disco deve haver ou um run em voo ou nada.
+
+## 2. O checkpoint no meio do run era o maior risco, e ele está resolvido
+
+O §22 listava isso como "o único item que muda o tamanho da fase". Está feito, com seis testes
+que mostram inclusive o que o `Checkpoint::None` custa — o nó de baixo lê um branco.
+
+Continuam faltando, e são todos da **fila**, não da engine: prioridade, justiça entre tenants,
+heartbeat e dead-letter durável.
+
+## 3. Uma decisão apareceu cinco vezes, e o plano só previa uma
+
+O §16.6 pedia saída ternária no branch. Escrevendo os nós, a mesma decisão reapareceu em
+`llm_decide`, em `approval`, em `compare` (devolve *nada* em vez de valor errado quando falta
+operando) e em `table_find`. **Não saber é um desfecho comum**, e a regra geral é mais ampla do
+que "todo nó de comparação tem três saídas": todo nó que extrai ou decide precisa poder dizer
+que não sabe.
+
+O terceiro braço do `if` é opcional (`config.unknown_arm`), porque braço de exec é pino no
+canvas — ligar por padrão faria todo `if` já salvo crescer um pino na frente de todo mundo.
+
+## 4. Duas armadilhas confirmadas, uma nova
+
+Confirmadas: o alias `notify_beacon` (o `NodeSpec` tem `aliases`) e o `ALL` com 90 de 91 (tem
+`hidden`). Nova: `SmolStr::new_static` guarda o ponteiro e **nunca** aloca, qualquer que seja o
+tamanho — o orçamento de 23 bytes só vale para id construído em runtime. É por isso que arquivo
+de nó declara o id como constante.
+
+## Próximo passo no bishop
+
+Fase 2: um nó por arquivo e o registry, **in place** no app-core, uma família por MR, com o
+snapshot do catálogo tendo que ficar byte-idêntico depois de cada uma.
