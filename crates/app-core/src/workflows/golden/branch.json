@@ -1,0 +1,87 @@
+{
+  "id": "01010101-0101-0101-0101-010101010101",
+  "name": "golden: branch",
+  "description": "",
+  "group": "",
+  "enabled": true,
+  "trigger": "Manual",
+  "concurrency": "SkipIfRunning",
+  "instance_scope": "Single",
+  "run_orphans": false,
+  "debug": false,
+  "template": false,
+  "global": false,
+  "next_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "num_gt",
+      "x": 0,
+      "y": 0,
+      "config": {
+        "a": "5",
+        "b": "3"
+      },
+      "memoize": false
+    },
+    {
+      "id": 2,
+      "kind": "if",
+      "x": 200,
+      "y": 0,
+      "config": {},
+      "memoize": false
+    },
+    {
+      "id": 3,
+      "kind": "print",
+      "x": 400,
+      "y": -80,
+      "config": {
+        "level": "info",
+        "message": "hot",
+        "on_screen": false
+      },
+      "memoize": false
+    },
+    {
+      "id": 4,
+      "kind": "print",
+      "x": 400,
+      "y": 80,
+      "config": {
+        "level": "info",
+        "message": "cold",
+        "on_screen": false
+      },
+      "memoize": false
+    }
+  ],
+  "edges": [
+    {
+      "from": 1,
+      "from_port": "result",
+      "to": 2,
+      "to_port": "condition"
+    },
+    {
+      "from": 2,
+      "from_port": "true",
+      "to": 3,
+      "to_port": "exec_in"
+    },
+    {
+      "from": 2,
+      "from_port": "false",
+      "to": 4,
+      "to_port": "exec_in"
+    }
+  ],
+  "viewport": {
+    "x": 40.0,
+    "y": 40.0,
+    "zoom": 1.0
+  },
+  "edge_vias": {},
+  "variables": []
+}

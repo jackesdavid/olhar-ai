@@ -135,6 +135,13 @@ kanban-plugin: board
 
 ## Generation
 
+- [ ] #204 ggraph — extrair a engine de grafos para repo próprio
+	  - Plan: [[ggraph-engine-extraction]]
+	  - Engine compartilhada com o Redoma (projeto novo). Repo: github.com/jackesdavid/graph-engine
+	  - Fase 0 (o oráculo) FEITA: `check:rust` agora RODA os 118 testes da engine, que antes eram
+	    só compilados; mais o snapshot do catálogo e os grafos-ouro. Sem isso o refactor não
+	    tinha rede nenhuma.
+
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]
 	  - Phase 1 BUILT: receipts read on a delayed work_jobs job; only DeviceNotRegistered

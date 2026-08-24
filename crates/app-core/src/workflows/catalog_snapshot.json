@@ -1,0 +1,3215 @@
+{
+  "kinds": [
+    {
+      "category": "Alerts",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Last Alert",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "id",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "level",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "message",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "room",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "source",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "get_last_alert"
+    },
+    {
+      "category": "Recipients",
+      "default_config": {
+        "recipient": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Find Recipient",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "recipient",
+          "required": false,
+          "type": "recipient"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "get_recipient"
+    },
+    {
+      "category": "Alerts",
+      "default_config": {
+        "level": "info",
+        "message": "",
+        "room": "",
+        "source": "workflow",
+        "timeout_secs": "15"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "room",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Create Alert",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "id",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "create_alert"
+    },
+    {
+      "category": "Alerts",
+      "default_config": {
+        "id": "",
+        "timeout_secs": "35"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "id",
+          "required": true,
+          "type": "num"
+        }
+      ],
+      "label": "Send Alert",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "deliver_alert"
+    },
+    {
+      "category": "Cameras",
+      "default_config": {
+        "camera": "first",
+        "timeout_secs": "10"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Snapshot",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "camera_snapshot"
+    },
+    {
+      "category": "Cameras",
+      "default_config": {
+        "camera": "first",
+        "max_age_ms": "2000",
+        "timeout_secs": "10"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Current Frame",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "age_ms",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "get_current_frame"
+    },
+    {
+      "category": "Cameras",
+      "default_config": {
+        "camera": ""
+      },
+      "inputs": [],
+      "label": "Find Camera",
+      "outputs": [
+        {
+          "name": "camera",
+          "required": false,
+          "type": "camera"
+        }
+      ],
+      "slug": "get_camera_by_name"
+    },
+    {
+      "category": "Cameras",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Unpack Camera",
+      "outputs": [
+        {
+          "name": "id",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ip",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "break_camera"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "camera": "first",
+        "name": "",
+        "points": []
+      },
+      "inputs": [
+        {
+          "name": "camera",
+          "required": false,
+          "type": "camera"
+        }
+      ],
+      "label": "Region",
+      "outputs": [
+        {
+          "name": "region",
+          "required": false,
+          "type": "region"
+        }
+      ],
+      "slug": "region"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "camera": "first",
+        "timeout_secs": "10"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Get Tracked Objects",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "objects",
+          "required": false,
+          "type": "tracked_object_array"
+        },
+        {
+          "name": "count",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "get_tracked_objects"
+    },
+    {
+      "category": "Vision",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "object",
+          "required": true,
+          "type": "tracked_object"
+        }
+      ],
+      "label": "Unpack Tracked Object",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "uuid",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "class",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "zone",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "break_tracked_object"
+    },
+    {
+      "category": "AI",
+      "default_config": {
+        "label": "",
+        "question": "",
+        "timeout_secs": "65"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "question",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Describe Image",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "description",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "describe_image"
+    },
+    {
+      "category": "Recipients",
+      "default_config": {
+        "message": "",
+        "timeout_secs": "35"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "recipient",
+          "required": false,
+          "type": "recipient"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        }
+      ],
+      "label": "Notify",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "notify_recipient"
+    },
+    {
+      "category": "Text",
+      "default_config": {
+        "p1": "",
+        "p2": "",
+        "p3": "",
+        "template": "{p1} — {p2}"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "p1",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "p2",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "p3",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Format",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "text",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "format"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "seconds": "1"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Wait",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "wait"
+    },
+    {
+      "category": "Network",
+      "default_config": {
+        "fields": {},
+        "file": "",
+        "headers": {},
+        "timeout_secs": "35",
+        "url": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "url",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "headers",
+          "required": false,
+          "type": "dictionary"
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "type": "dictionary"
+        },
+        {
+          "name": "file",
+          "required": false,
+          "type": "file"
+        }
+      ],
+      "label": "HTTP Post",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "status",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "response",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "http_post"
+    },
+    {
+      "category": "Control",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "condition",
+          "required": true,
+          "type": "bool"
+        }
+      ],
+      "label": "Branch",
+      "outputs": [
+        {
+          "name": "true",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "false",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "if"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "items": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "items",
+          "required": false,
+          "type": "any"
+        }
+      ],
+      "label": "For Each",
+      "outputs": [
+        {
+          "name": "loop_body",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "completed",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "item",
+          "required": false,
+          "type": "any"
+        },
+        {
+          "name": "index",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "for_each"
+    },
+    {
+      "category": "Control",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Toggle",
+      "outputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "is_a",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "flip_flop"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0",
+        "operator": "=="
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Compare",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "compare"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Less Than",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_lt"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Less Than or Equal",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_lte"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Greater Than",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_gt"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Greater Than or Equal",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_gte"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Number Equal",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_eq"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": "0",
+        "b": "0"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Number Not Equal",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "num_ne"
+    },
+    {
+      "category": "Logic",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "value",
+          "required": true,
+          "type": "num"
+        }
+      ],
+      "label": "Number to Text",
+      "outputs": [
+        {
+          "name": "text",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "num_to_text"
+    },
+    {
+      "category": "Logic",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "value",
+          "required": true,
+          "type": "bool"
+        }
+      ],
+      "label": "Yes/No to Text",
+      "outputs": [
+        {
+          "name": "text",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "bool_to_text"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "pixel_threshold": "25",
+        "sensitivity": "2",
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image_a",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "image_b",
+          "required": true,
+          "type": "image"
+        }
+      ],
+      "label": "Detect Motion",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "moved",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "score",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "motion_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "camera": "first",
+        "pixel_threshold": "25",
+        "sample_gap_ms": "400",
+        "sensitivity": "2",
+        "timeout_secs": "15"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Watch for Motion",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "moved",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "score",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "motion_watch"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        }
+      ],
+      "label": "Detect People",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "count",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "persons",
+          "required": false,
+          "type": "person_array"
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "person_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "class": "person",
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "class",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Detect Objects",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "count",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "detections",
+          "required": false,
+          "type": "person_array"
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "object_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "person",
+          "required": true,
+          "type": "person"
+        }
+      ],
+      "label": "Unpack Person",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "break_person_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "detection",
+          "required": true,
+          "type": "person"
+        }
+      ],
+      "label": "Unpack Detection",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "break_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "face",
+          "required": true,
+          "type": "face"
+        }
+      ],
+      "label": "Unpack Face",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "landmarks",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "break_face_detection"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "max_distance": "0.4",
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        }
+      ],
+      "label": "Recognize Person",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "person",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "person_id",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "recognize_person"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        }
+      ],
+      "label": "Extract Face Embedding",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "embedding",
+          "required": false,
+          "type": "embedding"
+        },
+        {
+          "name": "dim",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "face_embedding"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "max_distance": "0.5",
+        "timeout_secs": "15",
+        "top_k": "5"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "embedding",
+          "required": true,
+          "type": "embedding"
+        }
+      ],
+      "label": "Recognize Face",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "person",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "person_id",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "matches",
+          "required": false,
+          "type": "dictionary"
+        },
+        {
+          "name": "found",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "consistency",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "samples",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "margin",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ambiguous",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "recognize_face"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "dedup_distance": "0.15",
+        "source": "snapshot",
+        "timeout_secs": "15"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "embedding",
+          "required": true,
+          "type": "embedding"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "camera",
+          "required": false,
+          "type": "camera"
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "face_width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "kps",
+          "required": false,
+          "type": "landmarks"
+        },
+        {
+          "name": "blur",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "yaw",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "pitch",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "roll",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Store Face",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "stored",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "face_id",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "store_face"
+    },
+    {
+      "category": "Presence",
+      "default_config": {
+        "category": "person",
+        "duration_secs": "8",
+        "label": "",
+        "room": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "room",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "category",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "camera",
+          "required": false,
+          "type": "camera"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "frame_w",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "frame_h",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "duration_secs",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Record Presence",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "id",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "record_presence"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "event": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Send Event",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "emit_event"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "event": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "When Event",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "on_event"
+    },
+    {
+      "category": "Debug",
+      "default_config": {
+        "level": "info",
+        "message": "",
+        "on_screen": true
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "message",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "on_screen",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "label": "Print",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "print"
+    },
+    {
+      "category": "Debug",
+      "default_config": {
+        "label": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        }
+      ],
+      "label": "Show Image",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "show_image"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "window_secs": "60"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Cooldown",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "elapsed_secs",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "cooldown"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "color": "#00FF00",
+        "expand": "0",
+        "style": "box",
+        "thickness": "2"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "bbox",
+          "required": true,
+          "type": "bbox"
+        }
+      ],
+      "label": "Draw Detection Box",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "bbox",
+          "required": false,
+          "type": "bbox"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "draw_bbox"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "background": true,
+        "bg_color": "#000000",
+        "position": "top-left",
+        "size": "18",
+        "text": "",
+        "text_color": "#FFFFFF"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "bbox",
+          "required": true,
+          "type": "bbox"
+        },
+        {
+          "name": "text",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Draw Text",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "draw_text"
+    },
+    {
+      "category": "Vision",
+      "default_config": {
+        "blur": "12"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        },
+        {
+          "name": "bbox",
+          "required": true,
+          "type": "bbox"
+        }
+      ],
+      "label": "Blur Outside Box",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "blur_outside_bbox"
+    },
+    {
+      "category": "Vision",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": true,
+          "type": "image"
+        }
+      ],
+      "label": "Image Size",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "get_image_size"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": false,
+        "b": false
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "label": "And",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "and"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": false,
+        "b": false
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "label": "Or",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "or"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "a": false
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "label": "Not",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "not"
+    },
+    {
+      "category": "Logic",
+      "default_config": {
+        "b": "",
+        "operator": "eq"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "b",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Text Compare",
+      "outputs": [
+        {
+          "name": "result",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "text_compare"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "arms": [
+          "arm_1",
+          "arm_2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "Text Switch",
+      "outputs": [],
+      "slug": "string_switch"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "arms": []
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        }
+      ],
+      "label": "Camera Switch",
+      "outputs": [],
+      "slug": "camera_switch"
+    },
+    {
+      "category": "AI",
+      "default_config": {
+        "question": "",
+        "timeout_secs": "65"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        },
+        {
+          "name": "question",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "AI Branch",
+      "outputs": [
+        {
+          "name": "true",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "false",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "ask_ai"
+    },
+    {
+      "category": "Utility",
+      "default_config": {
+        "color": "#facc15",
+        "height": 200,
+        "text": "Comment",
+        "width": 400
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Comment",
+      "outputs": [],
+      "slug": "comment"
+    },
+    {
+      "category": "Display",
+      "default_config": {
+        "color": "#e5e7eb",
+        "size": "lg",
+        "text": "Title"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Title",
+      "outputs": [],
+      "slug": "title"
+    },
+    {
+      "category": "Display",
+      "default_config": {
+        "color": "#9ca3af",
+        "height": 160,
+        "text": "Description…",
+        "width": 320
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Paragraph",
+      "outputs": [],
+      "slug": "paragraph"
+    },
+    {
+      "category": "Display",
+      "default_config": {
+        "height": 220,
+        "text": "## Heading\n\n- point one\n- point two",
+        "width": 340
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Markdown",
+      "outputs": [],
+      "slug": "markdown"
+    },
+    {
+      "category": "Display",
+      "default_config": {
+        "bg_color": "#1f2937",
+        "text_color": "#e5e7eb",
+        "value": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Text",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "text"
+    },
+    {
+      "category": "Display",
+      "default_config": {
+        "color": "#22c55e",
+        "label": "",
+        "max": 100,
+        "min": 0,
+        "size": 160,
+        "value": 0
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Gauge",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "gauge"
+    },
+    {
+      "category": "Recording",
+      "default_config": {
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        },
+        {
+          "name": "pre_roll_secs",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "label": "Start Recording",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "clip_id",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "start_recording"
+    },
+    {
+      "category": "Recording",
+      "default_config": {
+        "timeout_secs": "15"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "camera"
+        },
+        {
+          "name": "clip_id",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Stop Recording",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "stop_recording"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "extend_secs": 10,
+        "wait_secs": 10
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Time Gate",
+      "outputs": [
+        {
+          "name": "out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "time_gate"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "extend_secs": 10,
+        "wait_secs": 10
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Delay Trigger",
+      "outputs": [
+        {
+          "name": "start",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "stop",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "delay_trigger"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "message": "",
+        "ttl_secs": "600"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "recipient",
+          "required": true,
+          "type": "recipient"
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "Device Gate",
+      "outputs": [
+        {
+          "name": "positive",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "negative",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "failure",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "answered_by",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "factor",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "device_gate"
+    },
+    {
+      "category": "Variables",
+      "default_config": {
+        "type": "text",
+        "variable": ""
+      },
+      "inputs": [],
+      "label": "Get Variable",
+      "outputs": [],
+      "slug": "get_variable"
+    },
+    {
+      "category": "Variables",
+      "default_config": {
+        "type": "text",
+        "variable": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Set Variable",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "set_variable"
+    },
+    {
+      "category": "Variables",
+      "default_config": {
+        "variables": []
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Set Variables",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "multi_set_variable"
+    },
+    {
+      "category": "Variables",
+      "default_config": {
+        "variables": []
+      },
+      "inputs": [],
+      "label": "Get Variables",
+      "outputs": [],
+      "slug": "multi_get_variable"
+    },
+    {
+      "category": "Telegram",
+      "default_config": {
+        "message": "",
+        "timeout_secs": "35"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "chat_id",
+          "required": true,
+          "type": "num"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        }
+      ],
+      "label": "Reply to Sender",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "reply_to_sender"
+    },
+    {
+      "category": "AI",
+      "default_config": {
+        "prompt": "",
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "prompt",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "image",
+          "required": false,
+          "type": "image"
+        }
+      ],
+      "label": "AI Answer",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "response",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "ai_answer"
+    },
+    {
+      "category": "Telegram",
+      "default_config": {
+        "caption": "",
+        "timeout_secs": "120"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "clip_id",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "chat_id",
+          "required": true,
+          "type": "num"
+        },
+        {
+          "name": "caption",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Reply with Recording",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "result",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "reply_with_recording"
+    },
+    {
+      "category": "Control",
+      "default_config": {
+        "arms": [
+          "arm_1",
+          "arm_2"
+        ],
+        "timeout_secs": "30"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "text",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "AI Switch",
+      "outputs": [],
+      "slug": "ai_switch"
+    },
+    {
+      "category": "AI",
+      "default_config": {
+        "field": "",
+        "timeout_secs": "30",
+        "type": "text"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "text",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "AI Extract",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "found",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "ai_extract"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        }
+      ],
+      "label": "Dictionary Table Row Count",
+      "outputs": [
+        {
+          "name": "count",
+          "required": false,
+          "type": "num"
+        }
+      ],
+      "slug": "dict_row_count"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "index": "0",
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "index",
+          "required": true,
+          "type": "num"
+        }
+      ],
+      "label": "Dictionary Table Get Row",
+      "outputs": [
+        {
+          "name": "row",
+          "required": false,
+          "type": "dictionary"
+        },
+        {
+          "name": "found",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "dict_get_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "column": "",
+        "key": "",
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "column",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "key",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "Dictionary Table Find Row",
+      "outputs": [
+        {
+          "name": "row",
+          "required": false,
+          "type": "dictionary"
+        },
+        {
+          "name": "index",
+          "required": false,
+          "type": "num"
+        },
+        {
+          "name": "found",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "dict_find_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "column": "",
+        "row": "0",
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "row",
+          "required": true,
+          "type": "num"
+        },
+        {
+          "name": "column",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "Dictionary Table Get Cell",
+      "outputs": [
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "found",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "slug": "dict_get_cell"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "table": "",
+        "values": {}
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "values",
+          "required": false,
+          "type": "dictionary"
+        }
+      ],
+      "label": "Dictionary Table Add Row",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "dict_add_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "column": "",
+        "row": "0",
+        "table": "",
+        "value": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "row",
+          "required": true,
+          "type": "num"
+        },
+        {
+          "name": "column",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "label": "Dictionary Table Set Cell",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "dict_set_cell"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "column": "",
+        "key": "",
+        "table": "",
+        "values": {}
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "column",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "key",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "values",
+          "required": false,
+          "type": "dictionary"
+        }
+      ],
+      "label": "Dictionary Table Update Row",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "dict_update_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "column": "",
+        "key": "",
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "column",
+          "required": true,
+          "type": "text"
+        },
+        {
+          "name": "key",
+          "required": true,
+          "type": "text"
+        }
+      ],
+      "label": "Dictionary Table Delete Row",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "dict_delete_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "table": ""
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        }
+      ],
+      "label": "Dictionary Table Clear",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "slug": "dict_clear"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "columns": []
+      },
+      "inputs": [],
+      "label": "Dictionary Schema",
+      "outputs": [
+        {
+          "name": "schema",
+          "required": false,
+          "type": "table"
+        }
+      ],
+      "slug": "dict_schema"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {
+        "columns": []
+      },
+      "inputs": [
+        {
+          "name": "schema",
+          "required": true,
+          "type": "table"
+        }
+      ],
+      "label": "Create Dictionary Row",
+      "outputs": [
+        {
+          "name": "row",
+          "required": false,
+          "type": "dictionary"
+        }
+      ],
+      "slug": "dict_make_row"
+    },
+    {
+      "category": "Dictionary Tables",
+      "default_config": {},
+      "inputs": [
+        {
+          "name": "table",
+          "required": true,
+          "type": "table"
+        },
+        {
+          "name": "row",
+          "required": true,
+          "type": "dictionary"
+        }
+      ],
+      "label": "Add Dictionary Row",
+      "outputs": [
+        {
+          "name": "table",
+          "required": false,
+          "type": "table"
+        }
+      ],
+      "slug": "dict_append_row"
+    },
+    {
+      "category": "Smart Home",
+      "default_config": {
+        "timeout_secs": "15",
+        "tuya_code": "",
+        "tuya_device": "",
+        "value": "",
+        "value_type": "bool"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Control Tuya Device",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "ok",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "response",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "tuya_control"
+    },
+    {
+      "category": "Smart Home",
+      "default_config": {
+        "timeout_secs": "15",
+        "tuya_code": "",
+        "tuya_device": "",
+        "value_type": "text"
+      },
+      "inputs": [
+        {
+          "name": "exec_in",
+          "required": false,
+          "type": "exec"
+        }
+      ],
+      "label": "Read Tuya Status",
+      "outputs": [
+        {
+          "name": "exec_out",
+          "required": false,
+          "type": "exec"
+        },
+        {
+          "name": "value",
+          "required": false,
+          "type": "text"
+        },
+        {
+          "name": "on",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "name": "raw",
+          "required": false,
+          "type": "text"
+        }
+      ],
+      "slug": "tuya_read_status"
+    }
+  ]
+}
