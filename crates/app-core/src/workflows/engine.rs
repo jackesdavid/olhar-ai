@@ -263,6 +263,14 @@ fn run_driver(
     // node id, in activation order) and we flush below, after every epoch, keeping only those whose
     // consumer actually ran. Activation/value semantics are untouched, so #114 can't regress.
     let mut deferred_get_logs: Vec<(u32, String, u128)> = Vec::new();
+    // #205. The buffer above covers `on_log` — the Console line — and has since #115. It never
+    // covered the CANVAS, because the highlight is driven by `on_node`, a different callback that
+    // `sentinel-flow` turns into the `workflow-node` event the editor animates. So a Get on a
+    // branch nobody took stayed quiet in the Console and lit up anyway on the graph.
+    //
+    // Same rule, second callback. Note this one is NOT behind `graph.debug`: a highlight is not a
+    // debug feature, and the reported symptom happens with debug off.
+    let mut deferred_get_nodes: Vec<u32> = Vec::new();
     let mut reentries = forward_epoch(
         graph,
         sys,
@@ -281,6 +289,7 @@ fn run_driver(
         on_log,
         emit,
         &mut deferred_get_logs,
+        &mut deferred_get_nodes,
     )?;
     // Later epochs: re-enter loops at the back-edge / ForEach targets until none fire.
     while !reentries.is_empty() {
@@ -303,6 +312,7 @@ fn run_driver(
             on_log,
             emit,
             &mut deferred_get_logs,
+            &mut deferred_get_nodes,
         )?;
     }
 
@@ -400,6 +410,7 @@ fn forward_epoch(
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
     deferred_get_logs: &mut Vec<(u32, String, u128)>,
+    deferred_get_nodes: &mut Vec<u32>,
 ) -> Result<Vec<u32>, String> {
     let mut indeg = indeg_tmpl.clone();
     let mut settled: HashSet<u32> = HashSet::new();
@@ -618,7 +629,27 @@ fn forward_epoch(
             ));
         }
 
-        on_node(nid);
+        // A pure `GetVariable` activates every epoch, including on branches nobody took (#205).
+        // Hold its ping until a node that READS it runs, and emit it just before that node —
+        // which is the moment it becomes true that the branch was taken. A Get whose readers all
+        // sat out never pings at all.
+        if n.kind == NodeKind::GetVariable {
+            if !deferred_get_nodes.contains(&nid) {
+                deferred_get_nodes.push(nid);
+            }
+        } else {
+            let feeders: Vec<u32> = graph
+                .edges
+                .iter()
+                .filter(|e| e.to == nid && deferred_get_nodes.contains(&e.from))
+                .map(|e| e.from)
+                .collect();
+            for f in feeders {
+                deferred_get_nodes.retain(|x| *x != f);
+                on_node(f);
+            }
+            on_node(nid);
+        }
 
         // ForEach: engine-driven iteration. Each epoch advances the index by one; fire
         // `loop_body` (with `item`+`index`) while elements remain and re-enter self next

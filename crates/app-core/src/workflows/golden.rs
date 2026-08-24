@@ -21,7 +21,7 @@
 //!     UPDATE_GOLDEN=1 cargo test -p app-core --lib workflows::golden
 
 use super::domain::{Graph, NodeKind};
-use super::node::PortValues;
+use super::node::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -304,4 +304,168 @@ fn a_node_saved_before_memoize_was_removed_still_loads() {
         serde_json::from_value(stored).expect("a stored node must still deserialize");
     assert_eq!(n.id, 3);
     assert_eq!(n.kind, NodeKind::Print);
+}
+
+// ---------------------------------------------------------------------------------------
+// The shape that #114/#115 were about
+// ---------------------------------------------------------------------------------------
+
+/// A pure source with **no incoming edges**, feeding a **required** input, entered as a
+/// **sub-run**.
+///
+/// This is the shape that silently broke twice. An orphan falls back to `seed_entries`, which is
+/// false for every `OnEvent`/timer sub-path, so the source never ran; its consumer's required
+/// input then resolved to nothing and the engine skipped the whole branch as dead — while the
+/// run reported `ok`. It worked on manual and cron runs and quietly did nothing on event-driven
+/// ones, which is why it took two cards to find.
+///
+/// Card #205 proposes narrowing the unconditional activation of pure sources so they stop
+/// lighting up branches nobody took. This is the oracle that narrowing needs: if it still
+/// passes, the read path covers the incident and the activation was doing nothing else. If it
+/// fails, the activation is load-bearing and the fix has to be shaped differently.
+fn shape_orphan_source_subrun() -> (Graph, u32, u32, u32) {
+    let mut g = graph("golden: orphan source in a sub-run", 4);
+    let src = g.add_node(NodeKind::GetVariable, 0, 0);
+    let switch = g.add_node(NodeKind::StringSwitch, 250, 0);
+    let taken = g.add_node(NodeKind::Print, 500, 0);
+    cfg(
+        &mut g,
+        src,
+        json!({ "variable": "greeting", "type": "text" }),
+    );
+    cfg(&mut g, switch, json!({ "arms": ["hello", "other"] }));
+    cfg(
+        &mut g,
+        taken,
+        json!({ "message": "took hello", "on_screen": false, "level": "info" }),
+    );
+    wire(&mut g, src, "value", switch, "value");
+    wire(&mut g, switch, "hello", taken, "exec_in");
+    (g, src, switch, taken)
+}
+
+#[test]
+fn an_orphan_pure_source_feeds_a_required_input_on_a_sub_run() {
+    let (g, src, switch, taken) = shape_orphan_source_subrun();
+    let sys = test_ctx();
+    sys.variables
+        .lock()
+        .unwrap()
+        .insert("greeting".into(), PortValue::Text("hello".into()));
+
+    // A sub-run: entered at the switch, the way an OnEvent or a timer enters one. Nothing is
+    // seeded from the graph's entry points, so the orphan source has to be reached some other
+    // way or its consumer's required input goes missing.
+    let mut order = Vec::new();
+    let mut on_node = |id: u32| order.push(id);
+    let mut on_log = |_: u32, _: &str, _: u128| {};
+    let mut emit = |_: &str, _: &PortValues| {};
+    super::engine::run_subpath_eventful(
+        &g,
+        &sys,
+        switch,
+        PortValues::new(),
+        &mut on_node,
+        &mut on_log,
+        &mut emit,
+    )
+    .expect("the sub-run must not fail");
+
+    assert!(
+        order.contains(&taken),
+        "the switch's `hello` arm must fire, which means its required `value` input resolved. \
+         It did not: {order:?}. That is the #114/#115 failure — a branch skipped as dead while \
+         the run reports ok."
+    );
+    let _ = src;
+}
+
+/// The same graph, run normally, still routes on the variable's value rather than on a default.
+#[test]
+fn the_orphan_source_is_read_at_the_moment_its_consumer_runs() {
+    let (g, _src, switch, taken) = shape_orphan_source_subrun();
+    let sys = test_ctx();
+    sys.variables
+        .lock()
+        .unwrap()
+        .insert("greeting".into(), PortValue::Text("other".into()));
+
+    let mut order = Vec::new();
+    let mut on_node = |id: u32| order.push(id);
+    let mut on_log = |_: u32, _: &str, _: u128| {};
+    let mut emit = |_: &str, _: &PortValues| {};
+    super::engine::run_subpath_eventful(
+        &g,
+        &sys,
+        switch,
+        PortValues::new(),
+        &mut on_node,
+        &mut on_log,
+        &mut emit,
+    )
+    .expect("runs");
+
+    assert!(
+        !order.contains(&taken),
+        "the variable says `other`, so the `hello` arm must stay dead: {order:?}"
+    );
+}
+
+/// The canvas highlight must follow the branch that ran, not every branch.
+///
+/// #115 fixed this for the Console line and stopped there, because the log and the highlight
+/// come from different callbacks — `on_log` and `on_node` — and only the first was deferred.
+/// The reported symptom (#205) was every `Get Variable` in a two-armed graph lighting up when
+/// one arm ran.
+///
+/// Asserted against `on_node`, which is what `sentinel-flow` turns into the `workflow-node`
+/// event the editor animates. Deliberately with `debug` OFF: a highlight is not a debug feature,
+/// and the log deferral is gated on debug, so a test that left it on would pass for the wrong
+/// reason.
+#[test]
+fn only_the_get_on_the_live_branch_lights_up() {
+    let mut g = graph("golden: two arms, two gets", 5);
+    g.debug = false;
+
+    let gate = g.add_node(NodeKind::If, 0, 0);
+    cfg(&mut g, gate, json!({ "condition": false }));
+
+    let get_dead = g.add_node(NodeKind::GetVariable, 0, -120);
+    cfg(&mut g, get_dead, json!({ "variable": "a", "type": "text" }));
+    let fmt_dead = g.add_node(NodeKind::Format, 250, -120);
+    cfg(
+        &mut g,
+        fmt_dead,
+        json!({ "template": "{p1}", "p1": "", "p2": "", "p3": "" }),
+    );
+
+    let get_live = g.add_node(NodeKind::GetVariable, 0, 120);
+    cfg(&mut g, get_live, json!({ "variable": "b", "type": "text" }));
+    let fmt_live = g.add_node(NodeKind::Format, 250, 120);
+    cfg(
+        &mut g,
+        fmt_live,
+        json!({ "template": "{p1}", "p1": "", "p2": "", "p3": "" }),
+    );
+
+    wire(&mut g, gate, "true", fmt_dead, "exec_in");
+    wire(&mut g, get_dead, "value", fmt_dead, "p1");
+    wire(&mut g, gate, "false", fmt_live, "exec_in");
+    wire(&mut g, get_live, "value", fmt_live, "p1");
+
+    let order = run_order(&g);
+
+    assert!(
+        order.contains(&get_live),
+        "the Get feeding the arm that ran must light up: {order:?}"
+    );
+    assert!(
+        !order.contains(&get_dead),
+        "the Get on the arm nobody took must NOT light up — this is #205, and it is what a \
+         person sees on the canvas: {order:?}"
+    );
+    assert!(
+        order.iter().position(|n| *n == get_live) < order.iter().position(|n| *n == fmt_live),
+        "and it must light up BEFORE the node that reads it, not at the end of the run: {order:?}"
+    );
 }
