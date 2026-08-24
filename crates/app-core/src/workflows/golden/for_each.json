@@ -1,0 +1,72 @@
+{
+  "id": "02020202-0202-0202-0202-020202020202",
+  "name": "golden: for each",
+  "description": "",
+  "group": "",
+  "enabled": true,
+  "trigger": "Manual",
+  "concurrency": "SkipIfRunning",
+  "instance_scope": "Single",
+  "run_orphans": false,
+  "debug": false,
+  "template": false,
+  "global": false,
+  "next_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "for_each",
+      "x": 0,
+      "y": 0,
+      "config": {
+        "items": "alpha,beta,gamma"
+      },
+      "memoize": false
+    },
+    {
+      "id": 2,
+      "kind": "print",
+      "x": 250,
+      "y": -80,
+      "config": {
+        "level": "info",
+        "message": "item",
+        "on_screen": false
+      },
+      "memoize": false
+    },
+    {
+      "id": 3,
+      "kind": "print",
+      "x": 250,
+      "y": 80,
+      "config": {
+        "level": "info",
+        "message": "done",
+        "on_screen": false
+      },
+      "memoize": false
+    }
+  ],
+  "edges": [
+    {
+      "from": 1,
+      "from_port": "loop_body",
+      "to": 2,
+      "to_port": "exec_in"
+    },
+    {
+      "from": 1,
+      "from_port": "completed",
+      "to": 3,
+      "to_port": "exec_in"
+    }
+  ],
+  "viewport": {
+    "x": 40.0,
+    "y": 40.0,
+    "zoom": 1.0
+  },
+  "edge_vias": {},
+  "variables": []
+}

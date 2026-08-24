@@ -4,14 +4,18 @@
 //! trigger fires a DAG of typed, single-responsibility nodes that runs once to
 //! completion. The ratatui editor (`handler`/`view`) is NOT ported — the Svelte
 //! editor drives the same model via Tauri commands.
+pub mod catalog;
 pub mod device_gate;
 pub mod domain;
 pub mod engine;
+#[cfg(test)]
+mod golden;
 pub mod node;
 pub mod repo;
 pub mod schedule;
 pub mod values;
 
+pub use catalog::catalog_json;
 pub use domain::{
     ConcurrencyPolicy, Edge, EventSource, Graph, GraphNode, InstanceScope, NodeKind, Port,
     PortType, RunStatus, Schedule, ScheduleFreq, Trigger, TriggerSource, VariableDecl, Viewport,

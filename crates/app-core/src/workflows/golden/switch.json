@@ -1,0 +1,100 @@
+{
+  "id": "03030303-0303-0303-0303-030303030303",
+  "name": "golden: switch",
+  "description": "",
+  "group": "",
+  "enabled": true,
+  "trigger": "Manual",
+  "concurrency": "SkipIfRunning",
+  "instance_scope": "Single",
+  "run_orphans": false,
+  "debug": false,
+  "template": false,
+  "global": false,
+  "next_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "format",
+      "x": 0,
+      "y": 0,
+      "config": {
+        "p1": "beta",
+        "p2": "",
+        "p3": "",
+        "template": "{p1}"
+      },
+      "memoize": false
+    },
+    {
+      "id": 2,
+      "kind": "string_switch",
+      "x": 250,
+      "y": 0,
+      "config": {
+        "arms": [
+          "alpha",
+          "beta"
+        ]
+      },
+      "memoize": false
+    },
+    {
+      "id": 3,
+      "kind": "print",
+      "x": 500,
+      "y": -80,
+      "config": {
+        "level": "info",
+        "message": "took alpha",
+        "on_screen": false
+      },
+      "memoize": false
+    },
+    {
+      "id": 4,
+      "kind": "print",
+      "x": 500,
+      "y": 80,
+      "config": {
+        "level": "info",
+        "message": "took beta",
+        "on_screen": false
+      },
+      "memoize": false
+    }
+  ],
+  "edges": [
+    {
+      "from": 1,
+      "from_port": "text",
+      "to": 2,
+      "to_port": "value"
+    },
+    {
+      "from": 1,
+      "from_port": "exec_out",
+      "to": 2,
+      "to_port": "exec_in"
+    },
+    {
+      "from": 2,
+      "from_port": "alpha",
+      "to": 3,
+      "to_port": "exec_in"
+    },
+    {
+      "from": 2,
+      "from_port": "beta",
+      "to": 4,
+      "to_port": "exec_in"
+    }
+  ],
+  "viewport": {
+    "x": 40.0,
+    "y": 40.0,
+    "zoom": 1.0
+  },
+  "edge_vias": {},
+  "variables": []
+}
