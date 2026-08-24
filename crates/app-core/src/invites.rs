@@ -280,7 +280,9 @@ mod tests {
                 !c.contains(['O', '0', 'I', '1', 'L']),
                 "confusable character in {c}"
             );
-            assert!(c.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit()));
+            assert!(c
+                .chars()
+                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit()));
         }
     }
 

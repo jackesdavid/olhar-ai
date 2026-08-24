@@ -4,9 +4,9 @@
 //! (no exec); `Set` writes on activation and passes exec through.
 use super::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
+use crate::workflows::domain::types;
 use crate::workflows::domain::{BBox, PortType};
 use serde_json::Value;
-use crate::workflows::domain::types;
 
 /// The variable name selected for this node (`config.variable`).
 fn var_name(config: &Value) -> Result<String, String> {

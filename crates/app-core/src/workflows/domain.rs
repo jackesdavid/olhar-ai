@@ -81,7 +81,26 @@ pub mod types {
     pub const TRACKED_OBJECT_ARRAY: PortType = PortType::new_static("tracked_object_array");
 }
 
-pub use ggraph_core::{Port, PortName, PortType};
+pub use ggraph_core::{Edge, Port, PortName, PortType};
+
+/// Where the canvas was left. Stays in this product rather than coming from the engine: the
+/// engine has no canvas, and the 40-pixel starting offset below is this editor's house style.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            x: 40.0,
+            y: 40.0,
+            zoom: 1.0,
+        }
+    }
+}
 
 /// A port declaration whose name is owned rather than static, for ports **derived from a node's
 /// config** (the payload ports of `EmitEvent`/`OnEvent`, one per field of the configured event).
@@ -169,6 +188,58 @@ impl BBox {
     }
     pub fn to_array(self) -> [i64; 4] {
         [self.x1, self.y1, self.x2, self.y2]
+    }
+}
+
+/// A node kind's ports, resolved against a configuration.
+///
+/// The registry needs the ports of a *kind* plus a config; `GraphNode` already knows how to
+/// work them out, including the eight kinds whose ports are config-derived. Rather than keep a
+/// second copy of that logic — which is exactly how the editor's palette and the scheduler came
+/// to disagree about the same node — these borrow the node's own answer through a throwaway.
+///
+/// The config clone is paid at catalog render and at wire validation, never in a run loop.
+pub fn resolved_input_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    probe(kind, config).input_ports()
+}
+
+pub fn resolved_output_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    probe(kind, config).output_ports()
+}
+
+pub fn resolved_exec_out_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    let node = probe(kind, config);
+    // The three switches name their arms from config; everything else has a static table.
+    match kind {
+        NodeKind::StringSwitch | NodeKind::AiSwitch => string_switch_arms(config)
+            .into_iter()
+            .chain(std::iter::once("default".to_string()))
+            .map(|a| ResolvedPort {
+                name: PortName::new(a),
+                ty: types::EXEC,
+                required: false,
+            })
+            .collect(),
+        NodeKind::CameraSwitch => (1..=camera_switch_arms(config).len())
+            .map(|i| format!("arm_{i}"))
+            .chain(std::iter::once("default".to_string()))
+            .map(|a| ResolvedPort {
+                name: PortName::new(a),
+                ty: types::EXEC,
+                required: false,
+            })
+            .collect(),
+        _ => node.kind.exec_out_ports().to_vec(),
+    }
+}
+
+fn probe(kind: NodeKind, config: &Value) -> GraphNode {
+    GraphNode {
+        id: 0,
+        kind,
+        x: 0,
+        y: 0,
+        config: config.clone(),
     }
 }
 
@@ -318,17 +389,17 @@ fn tuya_read_output_ports(config: &Value) -> Vec<ResolvedPort> {
         .unwrap_or(types::TEXT);
     vec![
         ResolvedPort {
-        name: PortName::new("value".to_string()),
+            name: PortName::new("value".to_string()),
             ty,
             required: false,
         },
         ResolvedPort {
-        name: PortName::new("on".to_string()),
+            name: PortName::new("on".to_string()),
             ty: types::BOOL,
             required: false,
         },
         ResolvedPort {
-        name: PortName::new("raw".to_string()),
+            name: PortName::new("raw".to_string()),
             ty: types::TEXT,
             required: false,
         },
@@ -347,12 +418,12 @@ fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
     if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
         vec![
             ResolvedPort {
-        name: PortName::new("camera".to_string()),
+                name: PortName::new("camera".to_string()),
                 ty: types::CAMERA,
                 required: false,
             },
             ResolvedPort {
-        name: PortName::new("region".to_string()),
+                name: PortName::new("region".to_string()),
                 ty: types::REGION,
                 required: false,
             },
@@ -420,7 +491,8 @@ pub enum NodeKind {
     If,
     /// Flow control: iterate a list (text: comma-separated or a JSON array). Fires
     /// `loop_body` once per element (with `item` + `index`), synchronously, then fires
-    /// `completed` once after the last. Body nodes should be memoize=off so they re-run.
+    /// `completed` once after the last. A body node runs on every pass, as being inside a
+    /// loop implies.
     ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
@@ -702,16 +774,11 @@ static RECORD_PRESENCE_IN: [Port; 8] = [
     p("frame_h", types::NUM, false), // source image height in pixels
     p("duration_secs", types::NUM, false),
 ];
-static RECORD_PRESENCE_OUT: [Port; 2] = [
-    p("id", types::NUM, false),
-    p("ok", types::BOOL, false),
-];
+static RECORD_PRESENCE_OUT: [Port; 2] = [p("id", types::NUM, false), p("ok", types::BOOL, false)];
 
 static DELIVER_ALERT_IN: [Port; 1] = [p("id", types::NUM, true)];
-static DELIVER_ALERT_OUT: [Port; 2] = [
-    p("result", types::TEXT, false),
-    p("ok", types::BOOL, false),
-];
+static DELIVER_ALERT_OUT: [Port; 2] =
+    [p("result", types::TEXT, false), p("ok", types::BOOL, false)];
 
 static CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
 static CAMERA_SNAPSHOT_OUT: [Port; 5] = [
@@ -776,10 +843,8 @@ static NOTIFY_RECIPIENT_IN: [Port; 3] = [
     p("recipient", types::RECIPIENT, false),
     p("image", types::IMAGE, false),
 ];
-static NOTIFY_RECIPIENT_OUT: [Port; 2] = [
-    p("result", types::TEXT, false),
-    p("ok", types::BOOL, false),
-];
+static NOTIFY_RECIPIENT_OUT: [Port; 2] =
+    [p("result", types::TEXT, false), p("ok", types::BOOL, false)];
 
 static FORMAT_IN: [Port; 3] = [
     p("p1", types::TEXT, false),
@@ -820,10 +885,7 @@ static TUYA_READ_STATUS_OUT: [Port; 3] = [
 static DICT_ROW_COUNT_IN: [Port; 1] = [p("table", types::TABLE, true)];
 static DICT_ROW_COUNT_OUT: [Port; 1] = [p("count", types::NUM, false)];
 
-static DICT_GET_ROW_IN: [Port; 2] = [
-    p("table", types::TABLE, true),
-    p("index", types::NUM, true),
-];
+static DICT_GET_ROW_IN: [Port; 2] = [p("table", types::TABLE, true), p("index", types::NUM, true)];
 static DICT_GET_ROW_OUT: [Port; 2] = [
     p("row", types::DICTIONARY, false),
     p("found", types::BOOL, false),
@@ -891,10 +953,7 @@ static IF_IN: [Port; 1] = [p("condition", types::BOOL, true)];
 // For each: iterate ANY array (a wired `*Array`, or a text list authored in config).
 // `items`/`item` are `Any` so one loop node handles every element type.
 static FOR_EACH_IN: [Port; 1] = [p("items", types::ANY, false)];
-static FOR_EACH_OUT: [Port; 2] = [
-    p("item", types::ANY, false),
-    p("index", types::NUM, false),
-];
+static FOR_EACH_OUT: [Port; 2] = [p("item", types::ANY, false), p("index", types::NUM, false)];
 
 // Object detection: detect any COCO class — class chosen by config or wired `class` input.
 static OBJECT_DETECTION_IN: [Port; 2] = [
@@ -987,9 +1046,9 @@ static RECOGNIZE_FACE_OUT: [Port; 9] = [
     // #123 — per-identity scoring, so a graph can branch on HOW the match was won, not just that
     // it was. `confidence` is one lucky crop; `consistency` is the whole identity agreeing.
     p("consistency", types::NUM, false), // percent from the mean of the identity's 3 nearest
-    p("samples", types::NUM, false), // how many of that identity's embeddings were candidates
-    p("margin", types::NUM, false),  // percentage points clear of the next DIFFERENT identity
-    p("ambiguous", types::BOOL, false), // runner-up within `margin` — found is forced false
+    p("samples", types::NUM, false),     // how many of that identity's embeddings were candidates
+    p("margin", types::NUM, false),      // percentage points clear of the next DIFFERENT identity
+    p("ambiguous", types::BOOL, false),  // runner-up within `margin` — found is forced false
 ];
 static STORE_FACE_IN: [Port; 12] = [
     p("image", types::IMAGE, false),
@@ -1028,8 +1087,7 @@ static TEXT_DISPLAY_IN: [Port; 1] = [p("value", types::TEXT, false)];
 static GAUGE_DISPLAY_IN: [Port; 1] = [p("value", types::NUM, false)];
 
 // Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
-static EXEC_OUT_FLIP_FLOP: [Port; 2] =
-    [p("a", types::EXEC, false), p("b", types::EXEC, false)];
+static EXEC_OUT_FLIP_FLOP: [Port; 2] = [p("a", types::EXEC, false), p("b", types::EXEC, false)];
 static FLIP_FLOP_OUT: [Port; 1] = [p("is_a", types::BOOL, false)];
 
 // Compare: two numeric inputs (wired or literal) → a bool result.
@@ -1046,10 +1104,7 @@ static COOLDOWN_OUT: [Port; 2] = [
     p("ok", types::BOOL, false),
 ];
 
-static DRAW_BBOX_IN: [Port; 2] = [
-    p("image", types::IMAGE, true),
-    p("bbox", types::BBOX, true),
-];
+static DRAW_BBOX_IN: [Port; 2] = [p("image", types::IMAGE, true), p("bbox", types::BBOX, true)];
 // `bbox` is the box actually drawn — i.e. the input box after the `expand` config is applied,
 // so downstream nodes (blur, crop, presence) can reuse the expanded region.
 static DRAW_BBOX_OUT: [Port; 3] = [
@@ -1064,19 +1119,12 @@ static DRAW_TEXT_IN: [Port; 3] = [
     p("bbox", types::BBOX, true),
     p("text", types::TEXT, false),
 ];
-static DRAW_TEXT_OUT: [Port; 2] = [
-    p("image", types::IMAGE, false),
-    p("ok", types::BOOL, false),
-];
+static DRAW_TEXT_OUT: [Port; 2] = [p("image", types::IMAGE, false), p("ok", types::BOOL, false)];
 
-static BLUR_OUTSIDE_BBOX_IN: [Port; 2] = [
-    p("image", types::IMAGE, true),
-    p("bbox", types::BBOX, true),
-];
-static BLUR_OUTSIDE_BBOX_OUT: [Port; 2] = [
-    p("image", types::IMAGE, false),
-    p("ok", types::BOOL, false),
-];
+static BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
+    [p("image", types::IMAGE, true), p("bbox", types::BBOX, true)];
+static BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
+    [p("image", types::IMAGE, false), p("ok", types::BOOL, false)];
 
 static GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", types::IMAGE, true)];
 static GET_IMAGE_SIZE_OUT: [Port; 3] = [
@@ -2062,13 +2110,6 @@ pub struct GraphNode {
     /// Static settings + literal fallbacks for unconnected input ports.
     #[serde(default)]
     pub config: Value,
-    /// Whether this node's output is cached for the duration of a run (default) or
-    /// recomputed every time the node is reached. `true` = today's behavior (runs once,
-    /// reused on fan-out). Set `false` for loop bodies and time-varying sources
-    /// (e.g. `GetCurrentFrame`) so re-activation actually re-runs them. Old graphs
-    /// (no field) deserialize to `true`.
-    #[serde(default = "default_true")]
-    pub memoize: bool,
 }
 
 /// Default grace for a LATE cron fire, in seconds (#cron-node).
@@ -2160,7 +2201,7 @@ impl GraphNode {
             NodeKind::AiExtract => {
                 let mut ports = variable_port(&self.config, false);
                 ports.push(ResolvedPort {
-        name: PortName::new("found".to_string()),
+                    name: PortName::new("found".to_string()),
                     ty: types::BOOL,
                     required: false,
                 });
@@ -2187,7 +2228,7 @@ impl GraphNode {
             let arms = string_switch_arms(&self.config);
             if arms.iter().any(|a| a == name) || name == "default" {
                 return Some(ResolvedPort {
-        name: PortName::new(name.to_string()),
+                    name: PortName::new(name.to_string()),
                     ty: types::EXEC,
                     required: false,
                 });
@@ -2201,7 +2242,7 @@ impl GraphNode {
                 (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
             if valid {
                 return Some(ResolvedPort {
-        name: PortName::new(name.to_string()),
+                    name: PortName::new(name.to_string()),
                     ty: types::EXEC,
                     required: false,
                 });
@@ -2243,15 +2284,6 @@ pub fn camera_switch_arms(config: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// A typed, directed wire: source node's `from_port` → target node's `to_port`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Edge {
-    pub from: u32,
-    pub from_port: String,
-    pub to: u32,
-    pub to_port: String,
 }
 
 /// How a graph fires **as a whole** — which, since the cron selector landed on `When Event`, is
@@ -2445,25 +2477,6 @@ impl Default for ConcurrencyPolicy {
 // Graph
 // ---------------------------------------------------------------------------
 
-/// The editor's saved camera position — pan offset (px) + zoom — persisted per
-/// graph so re-opening it restores where the operator left off.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Viewport {
-    pub x: f64,
-    pub y: f64,
-    pub zoom: f64,
-}
-
-impl Default for Viewport {
-    fn default() -> Self {
-        Viewport {
-            x: 40.0,
-            y: 40.0,
-            zoom: 1.0,
-        }
-    }
-}
-
 /// One named automation: a trigger + a DAG of typed nodes/edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
@@ -2652,7 +2665,7 @@ impl Graph {
         Some((name, points))
     }
 
-    /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false
+    /// Add a node at (x, y); returns its new id.
     /// (recompute every time) — the user opts in to caching explicitly via the inspector.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
@@ -2663,7 +2676,6 @@ impl Graph {
             x,
             y,
             config: kind.default_config(),
-            memoize: false,
         });
         id
     }
@@ -2771,9 +2783,9 @@ impl Graph {
         }
         self.edges.push(Edge {
             from,
-            from_port: from_port.to_string(),
+            from_port: PortName::new(from_port),
             to,
-            to_port: to_port.to_string(),
+            to_port: PortName::new(to_port),
         });
         Ok(())
     }
@@ -3117,31 +3129,6 @@ mod tests {
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
         assert_eq!(g, g2);
-    }
-
-    #[test]
-    fn memoize_defaults_false_for_new_nodes_and_round_trips() {
-        // New nodes default to memoize=false.
-        let mut g = Graph::new("g");
-        let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(
-            !g.node(n).unwrap().memoize,
-            "new node defaults to memoize=false"
-        );
-
-        // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
-        let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
-        let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(
-            node.memoize,
-            "missing memoize → true (back-compat for pre-memoize nodes)"
-        );
-
-        // memoize=true round-trips.
-        g.node_mut(n).unwrap().memoize = true;
-        let s = serde_json::to_string(&g).unwrap();
-        let g2: Graph = serde_json::from_str(&s).unwrap();
-        assert!(g2.node(n).unwrap().memoize);
     }
 
     #[test]

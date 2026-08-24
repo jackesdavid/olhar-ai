@@ -178,11 +178,7 @@ impl Gallery {
             .map(|(r, e)| (cosine_distance(query, e), r))
             .collect();
         scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-        scored
-            .into_iter()
-            .take(k)
-            .map(|(_, r)| r.clone())
-            .collect()
+        scored.into_iter().take(k).map(|(_, r)| r.clone()).collect()
     }
 
     /// Mean intra-identity vs inter-identity distance — printed so the numbers below are
@@ -214,8 +210,16 @@ impl Gallery {
             }
         }
         (
-            if intra_n > 0 { intra / intra_n as f32 } else { 0.0 },
-            if inter_n > 0 { inter / inter_n as f32 } else { 0.0 },
+            if intra_n > 0 {
+                intra / intra_n as f32
+            } else {
+                0.0
+            },
+            if inter_n > 0 {
+                inter / inter_n as f32
+            } else {
+                0.0
+            },
         )
     }
 }
@@ -393,7 +397,12 @@ fn summarize(name: &str, hits: &[(Vec<String>, Vec<String>, String, f64)]) -> Re
 }
 
 /// Whether a plan uses a vector index — the assertion that catches both pgvector traps.
-async fn plan_uses_hnsw(pool: &PgPool, sql: &str, query: &[f32], tenant: uuid::Uuid) -> (bool, bool) {
+async fn plan_uses_hnsw(
+    pool: &PgPool,
+    sql: &str,
+    query: &[f32],
+    tenant: uuid::Uuid,
+) -> (bool, bool) {
     let lit = vector_literal(query);
     let explain = format!("EXPLAIN (ANALYZE, BUFFERS) {sql}");
     let rows = sqlx::query(&explain)
@@ -722,7 +731,10 @@ async fn seed_unlabeled(
         let centroid = l2_normalize(&rng.vec(DIM));
         let tag = format!("ident-{i:04}");
         for _ in 0..per_identity {
-            batch.push((tag.clone(), vector_literal(&member_of(&centroid, sigma, &mut rng))));
+            batch.push((
+                tag.clone(),
+                vector_literal(&member_of(&centroid, sigma, &mut rng)),
+            ));
         }
     }
     // The identity tag rides in `source` so ground truth can be read back from the DB rather than
@@ -750,15 +762,13 @@ async fn seed_unlabeled(
 
     sqlx::query("ANALYZE faces").execute(pool).await.ok();
 
-    sqlx::query_as::<_, (String, String)>(
-        "SELECT id::text, source FROM faces WHERE tenant_id = $1",
-    )
-    .bind(tenant)
-    .fetch_all(pool)
-    .await
-    .expect("read back ground truth")
-    .into_iter()
-    .collect()
+    sqlx::query_as::<_, (String, String)>("SELECT id::text, source FROM faces WHERE tenant_id = $1")
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+        .expect("read back ground truth")
+        .into_iter()
+        .collect()
 }
 
 #[test]
@@ -1020,7 +1030,11 @@ fn face_detail_decodes_every_column() {
         assert_eq!(d.yaw.map(|v| v.round()), Some(-8.0), "yaw");
         assert_eq!(d.pitch.map(|v| v.round()), Some(3.0), "pitch");
         assert_eq!(d.roll.map(|v| v.round()), Some(2.0), "roll");
-        assert_eq!(d.landmarks_source.as_deref(), Some("yunet_5"), "landmarks source");
+        assert_eq!(
+            d.landmarks_source.as_deref(),
+            Some("yunet_5"),
+            "landmarks source"
+        );
         assert!(d.landmarks.is_some(), "landmarks");
         assert_eq!(d.face.face_width, 128, "face_width");
     }));

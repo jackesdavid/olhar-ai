@@ -167,7 +167,8 @@ pub fn rename(db: &Db, tenant_id: Uuid, id: Uuid, label: &str) -> Result<String,
         .fetch_optional(&pool)
         .await
         .map_err(|e| e.to_string())?;
-        row.map(|(old,)| old).ok_or_else(|| "No such device.".to_string())
+        row.map(|(old,)| old)
+            .ok_or_else(|| "No such device.".to_string())
     })
 }
 
@@ -424,11 +425,13 @@ pub fn disable_by_token(db: &Db, tenant_id: Uuid, token: &str) -> bool {
     let pool = db.pool();
     let token = token.to_string();
     db.block(async move {
-        sqlx::query("UPDATE push_devices SET enabled = false WHERE tenant_id = $1 AND device_token = $2")
-            .bind(tenant_id)
-            .bind(&token)
-            .execute(&pool)
-            .await
+        sqlx::query(
+            "UPDATE push_devices SET enabled = false WHERE tenant_id = $1 AND device_token = $2",
+        )
+        .bind(tenant_id)
+        .bind(&token)
+        .execute(&pool)
+        .await
     })
     .map(|r| r.rows_affected() > 0)
     .unwrap_or_else(|e| {

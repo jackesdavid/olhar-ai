@@ -794,15 +794,6 @@ export const data = {
   ): Promise<void> => {
     await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/config`, config);
   },
-  setNodeMemoize: async (
-    graphId: string,
-    nodeId: number,
-    memoize: boolean,
-  ): Promise<void> => {
-    await api.put<void>(`/workflows/${graphId}/nodes/${nodeId}/memoize`, {
-      memoize,
-    });
-  },
   addEdge: async (
     graphId: string,
     from: number,

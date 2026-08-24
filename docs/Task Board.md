@@ -20,6 +20,19 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #205 Pure sources activate on dead branches — the canvas is telling the truth
+	  - Plan: [[pure-sources-run-on-dead-branches]]
+	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
+	    Get Recipient / Get Camera light up (and RUN) on arms nobody took. Two of the four hit
+	    the database. No wrong data flows — the arm's consumers still don't run — but the run
+	    log implies the arm executed.
+	  - ROOT CAUSE FOUND: #115 already defers the Console line for a dead-branch Get and works.
+	    The canvas highlight comes from a DIFFERENT callback — `on_node` → `workflow-node` event
+	    → the editor's highlight controller — which has no deferral. Two callbacks, one fix.
+	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
+	    the activation: measured, that fails three tests including the #114/#115 one.
+	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
+
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]
 	  - Was missing from the board entirely while the plan still listed it open (P0).

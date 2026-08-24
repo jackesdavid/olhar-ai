@@ -259,7 +259,10 @@ fn a_loop_runs_its_body_once_per_item_then_completes() {
     let order = run_order(&g);
     // 1 = for_each, 2 = print(body), 3 = print(done)
     let body = order.iter().filter(|id| **id == 2).count();
-    assert_eq!(body, 3, "three items must run the body three times: {order:?}");
+    assert_eq!(
+        body, 3,
+        "three items must run the body three times: {order:?}"
+    );
     let done = order.iter().filter(|id| **id == 3).count();
     assert_eq!(done, 1, "completed must fire exactly once: {order:?}");
     assert_eq!(
@@ -282,4 +285,23 @@ fn a_switch_takes_the_arm_matching_its_value() {
         !order.contains(&3),
         "the alpha arm must stay dead: {order:?}"
     );
+}
+
+/// A stored node still carries `"memoize": false` — 249 of them in production the day it was
+/// removed. Serde ignores unknown fields by default, so they load; this asserts that rather than
+/// trusting it, because the failure mode is every graph refusing to open at once.
+#[test]
+fn a_node_saved_before_memoize_was_removed_still_loads() {
+    let stored = serde_json::json!({
+        "id": 3,
+        "kind": "print",
+        "x": 10,
+        "y": 20,
+        "config": { "message": "hi" },
+        "memoize": false
+    });
+    let n: super::domain::GraphNode =
+        serde_json::from_value(stored).expect("a stored node must still deserialize");
+    assert_eq!(n.id, 3);
+    assert_eq!(n.kind, NodeKind::Print);
 }

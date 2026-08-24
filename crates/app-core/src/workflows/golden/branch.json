@@ -21,16 +21,14 @@
       "config": {
         "a": "5",
         "b": "3"
-      },
-      "memoize": false
+      }
     },
     {
       "id": 2,
       "kind": "if",
       "x": 200,
       "y": 0,
-      "config": {},
-      "memoize": false
+      "config": {}
     },
     {
       "id": 3,
@@ -41,8 +39,7 @@
         "level": "info",
         "message": "hot",
         "on_screen": false
-      },
-      "memoize": false
+      }
     },
     {
       "id": 4,
@@ -53,8 +50,7 @@
         "level": "info",
         "message": "cold",
         "on_screen": false
-      },
-      "memoize": false
+      }
     }
   ],
   "edges": [

@@ -126,7 +126,7 @@
     outputs: CatPort[];
     default_config: Record<string, unknown>;
   };
-  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
+  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown> };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type ScheduleFreq = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
   type ScheduleT = {
@@ -309,7 +309,6 @@
   type ClipNode = {
     kind: string;
     config: Record<string, unknown>;
-    memoize?: boolean;
     dx: number;
     dy: number;
   };
@@ -575,7 +574,6 @@
         .map((n) => ({
           kind: n.kind as string,
           config: (n.config ?? {}) as Record<string, unknown>,
-          memoize: n.memoize as boolean | undefined,
           dx: Number(n.dx) || 0,
           dy: Number(n.dy) || 0,
         }));
@@ -1311,7 +1309,9 @@
     // (adaptive widget) is the unwired fallback. Mirrors Set Variable.
     if (node.kind === "tuya_control") {
       const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "bool") as CatPort["type"];
-      return { ...k, inputs: [...k.inputs, { name: "value", type: ty, required: false }] };
+      // Replace rather than append: the catalog already declares `value` for the default
+      // value_type, and this override is the same port typed by THIS node's config.
+      return { ...k, inputs: [...k.inputs.filter((p) => p.name !== "value"), { name: "value", type: ty, required: false }] };
     }
     // Read Tuya Status: the `value` output is typed by the selected data point (like the control
     // node's input), so a read wires straight into the right type; `on`/`raw` stay static.
@@ -1343,7 +1343,8 @@
       const colPorts: CatPort[] = cols
         .filter((c) => c && String(c.name).trim())
         .map((c) => ({ name: String(c.name), type: (c.type ?? "text") as CatPort["type"], required: false }));
-      return { ...k, inputs: [...k.inputs, ...colPorts] };
+      const colNames = new Set(colPorts.map((p) => p.name));
+      return { ...k, inputs: [...k.inputs.filter((p) => !colNames.has(p.name)), ...colPorts] };
     }
     // AI Extract: `value` output typed per config.type (so it wires straight into Camera/Notify) + found.
     if (node.kind === "ai_extract") {
@@ -2476,12 +2477,11 @@
       cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
     }
     // Local + instant: a real client-assigned id, no server round-trip. Persists on Save (#122).
-    // memoize defaults to FALSE — matching Rust `Graph::add_node`. Sending it explicitly is
     // required: omitting it makes the backend's `#[serde(default = "default_true")]` flip it ON,
     // which silently breaks loop bodies (the node caches after one pass and won't iterate).
     const g = graph;
     const id = nextNodeId(g);
-    g.nodes.push({ id, kind: slug, x, y, config: cfg, memoize: false } as Node);
+    g.nodes.push({ id, kind: slug, x, y, config: cfg } as Node);
     selectedNodeId = id;
     markDirty();
     return id;
@@ -3090,7 +3090,7 @@
   /** The selection as a detached clipboard payload, or null when nothing is selected. Pure — no
    *  toasts, no state written.
    *
-   *  A clipboard entry carries the node's KIND, its panel config, its memoize flag, and where it
+   *  A clipboard entry carries the node's KIND, its panel config, and where it
    *  sat relative to the top-left of the copied set. Deliberately NOT its id (the paste mints one),
    *  NOT its absolute position (the cursor decides that), and NOT its wires (#180).
    *
@@ -3108,7 +3108,6 @@
       nodes: nodes.map((n) => ({
         kind: n.kind,
         config: $state.snapshot(n.config) as Record<string, unknown>,
-        memoize: n.memoize,
         dx: n.x - left,
         dy: n.y - top,
       })),
@@ -3172,7 +3171,6 @@
         x: src.x + DUPLICATE_OFFSET,
         y: src.y + DUPLICATE_OFFSET,
         config: structuredClone($state.snapshot(src.config)) as Record<string, unknown>,
-        memoize: src.memoize,
       } as Node);
     }
     selectedIds = new Set(created);
@@ -3236,7 +3234,6 @@
         x: Math.round(originX + src.dx),
         y: Math.round(originY + src.dy),
         config: structuredClone(src.config) as Record<string, unknown>,
-        memoize: src.memoize,
       } as Node);
     }
     selectedIds = new Set(created);
@@ -3348,11 +3345,6 @@
   function liveSaveConfig(n: Node, key: string, value: unknown) {
     if (!graph) return;
     n.config = { ...n.config, [key]: value };
-    markDirty();
-  }
-  function saveNodeMemoize(n: Node, memoize: boolean) {
-    if (!graph) return;
-    n.memoize = memoize; // local + instant; persists on Save (#122)
     markDirty();
   }
   // Pick a file via a hidden browser input. Browsers don't expose real filesystem paths,
@@ -5645,24 +5637,6 @@
                     >+ Add arm</Button>
                   </div>
                   <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm fires when no camera matches.</p>
-                </div>
-              {/if}
-              <!-- Memoize: cache the node's output for the run (default) vs recompute each
-                   time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
-                   Hidden for event nodes — they're no-op signals that never memoize. -->
-              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event" && selectedNode.kind !== "comment"}
-                <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
-                  <Label
-                    class="flex items-center gap-1.5 text-xs text-muted-foreground"
-                    title={t.memoizeHelp}
-                  >
-                    Memoize output
-                  </Label>
-                  <Switch
-                    checked={selectedNode.memoize === true}
-                    disabled={editLocked}
-                    onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
-                  />
                 </div>
               {/if}
             </div>

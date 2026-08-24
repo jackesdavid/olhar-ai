@@ -243,10 +243,13 @@ impl PaymentGateway for StripeGateway {
     }
 
     fn cancel_subscription(&self, subscription_ref: &str) -> Result<(), String> {
-        let out = ureq::delete(&format!("{}/v1/subscriptions/{}", self.base, subscription_ref))
-            .set("Authorization", &format!("Bearer {}", self.api_key))
-            .timeout(Duration::from_secs(20))
-            .call();
+        let out = ureq::delete(&format!(
+            "{}/v1/subscriptions/{}",
+            self.base, subscription_ref
+        ))
+        .set("Authorization", &format!("Bearer {}", self.api_key))
+        .timeout(Duration::from_secs(20))
+        .call();
         match out {
             Ok(_) => Ok(()),
             // Already gone is the outcome we wanted, not a failure.

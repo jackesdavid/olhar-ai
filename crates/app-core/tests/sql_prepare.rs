@@ -35,7 +35,9 @@ const SCAN_DIRS: &[&str] = &[
 
 /// Leading keywords `PREPARE` accepts. Anything else (LISTEN, SET, TRUNCATE, DDL) is reported as
 /// skipped rather than failed — Postgres rejects it for what it is, not for being wrong.
-const PREPARABLE: &[&str] = &["SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "MERGE"];
+const PREPARABLE: &[&str] = &[
+    "SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "MERGE",
+];
 
 /// Chain methods that may sit between the SQL literal and the executor without ending the bind
 /// chain. Anything not listed here (and not an executor) makes the chain "unparsed": the statement
@@ -348,7 +350,9 @@ fn read_string_literal(b: &[char], p: usize) -> Option<(String, usize)> {
         }
         q += 1;
         let start = q;
-        let closing: String = std::iter::once('"').chain(std::iter::repeat('#').take(hashes)).collect();
+        let closing: String = std::iter::once('"')
+            .chain(std::iter::repeat('#').take(hashes))
+            .collect();
         let end = find_from(b, q, &closing)?;
         return Some((b[start..end].iter().collect(), end + closing.len()));
     }
@@ -484,7 +488,9 @@ fn skip_trivia(b: &[char], mut p: usize) -> usize {
 }
 
 fn starts_with(b: &[char], p: usize, pat: &str) -> bool {
-    pat.chars().enumerate().all(|(k, c)| b.get(p + k) == Some(&c))
+    pat.chars()
+        .enumerate()
+        .all(|(k, c)| b.get(p + k) == Some(&c))
 }
 
 fn find_from(b: &[char], from: usize, pat: &str) -> Option<usize> {
@@ -604,7 +610,10 @@ fn every_tenant_scoped_statement_names_the_tenant() {
     let mut findings: Vec<(String, String)> = Vec::new();
     for site in &sites {
         let touched = tables_touched(&site.sql);
-        let scoped: Vec<&String> = touched.iter().filter(|t| tenant_tables.contains(*t)).collect();
+        let scoped: Vec<&String> = touched
+            .iter()
+            .filter(|t| tenant_tables.contains(*t))
+            .collect();
         if scoped.is_empty() {
             continue;
         }

@@ -7,9 +7,12 @@
 use app_core::notification::templates;
 
 fn main() {
-    let dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| std::env::temp_dir().join("sentinel-emails").display().to_string());
+    let dir = std::env::args().nth(1).unwrap_or_else(|| {
+        std::env::temp_dir()
+            .join("sentinel-emails")
+            .display()
+            .to_string()
+    });
     std::fs::create_dir_all(&dir).expect("create output dir");
 
     let app = "https://app.olharai.com";
@@ -18,7 +21,10 @@ fn main() {
     for lang in [templates::Lang::En, templates::Lang::Pt] {
         let tag = lang.as_tag();
         let samples = [
-            ("welcome", templates::welcome("jo@example.com", "Jo", app, lang)),
+            (
+                "welcome",
+                templates::welcome("jo@example.com", "Jo", app, lang),
+            ),
             (
                 "password-reset",
                 templates::password_reset(
