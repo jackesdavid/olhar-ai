@@ -43,6 +43,17 @@ fires inside the SAME run; afterwards it fires in a NEW one.** Three consequence
 - Anything downstream of the gate stops seeing run-scoped VARIABLES set before it.
 - The trailing run needs the marker in its entry payload.
 
+And one more that only turned up by reading `DelayTrigger`'s implementation, which is the real
+cost and was missing from this card: **run-scoped variables do not survive either.** A `Get`
+below the trailing arm reads a type-zero for whatever a `Set` wrote on the arming run — that was
+#114, and the fix was a whole extra mechanism: snapshot the variable map onto the node's own row
+when it arms or extends, restore it before the trailing arm fires.
+
+`TimeGate` will need the same, or it will lose variables silently. That is not a reason not to do
+it — it is the thing to build alongside, and the code now exists to copy from
+(`workflows/steps/delay_trigger.rs`, which owns both halves rather than leaving them in the
+driver).
+
 ## The trap, already documented next door
 
 `DelayTrigger`'s comment records it and it would have been repeated as a bug: the test for "the
