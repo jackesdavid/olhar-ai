@@ -290,12 +290,28 @@ instead of an empty static table. That was a real, long-standing design bug: the
 answer now. The editor was **appending** its own derived `value` pin to whatever the catalog
 sent for `tuya_control`; it replaces instead, or the fix would have drawn two.
 
-**NOT swapped: the scheduler.** `engine.rs` is 2,621 lines with semantics the three golden graphs
-do not cover — `DelayTrigger` windows, `DeviceGate`, instance scope, event seeding, concurrency
-policy, run logs. It needs its own MR and its own verification, and the strategy to use is a
-differential test: run every real graph shape under both schedulers and require the same node
-sequence. Also still local: `Graph<SentinelMeta>` (a prerequisite for the swap), one-node-per-file
-(cosmetic, 70 functions), and `repo.rs` + the 12 engine-owned migrations.
+**Twelve of twelve node kinds are now engine behaviours** (`workflows/steps/`, one file each):
+ForEach, Cooldown, FlipFlop, Comment, Text/Gauge, ShowImage, EmitEvent, OnEvent, DelayTrigger,
+DeviceGate. Only `TimeGate` is outside, deliberately — see #207, it changes when `out` fires.
+
+Both schedulers still exist and that is the CORRECT state during the migration: this product's
+`engine.rs` keeps its inline blocks, the registry carries the converted behaviours, and
+`workflows/differential.rs` runs the same graph through both and requires the same node sequence.
+Six shapes agree with `KNOWN_DIFFERENCES` empty — chain, branch, loop, cooldown, flip-flop,
+display. Each kind converted turned an entry in that list into an agreement.
+
+Two fields joined `ToolContext` on the way, both for the reason `ui_tx` was already there —
+this product's world, supplied by whoever runs the graph, so no engine trait learns what an event
+is here or what a graph is called:
+
+- `emitter: Option<Arc<dyn EventEmitter>>` — the cross-graph bus. `None` means no bus, and
+  `EmitEvent` then SAYS the event was not fired rather than reporting a fire that reached nobody.
+- `graph_name: String` — what a person reads on a lock screen when a Device Gate asks them.
+
+**NOT swapped: the scheduler itself.** Replacing `run_dag_eventful` with `ggraph_core::run` is
+the last step and only became possible once the twelve kinds had real behaviours. The differential
+suite is the gate for it: extend the shape list first, then swap, then delete `engine.rs`'s
+inline blocks. Still local as well: `repo.rs` and the 12 engine-owned migrations.
 
 **The oracles are what made this a mechanical afternoon rather than a gamble.** `check:rust` runs
 `cargo test -p app-core --lib workflows` — before #204 it ran `cargo check --all-targets`, which

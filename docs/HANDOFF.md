@@ -6,6 +6,70 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-25 — the node set becomes engine behaviours, twelve of twelve
+
+- **Branch:** `feat/204-steps-durable` → !145, CI running when this was written. Everything
+  before it is merged: !141 through !144.
+- **Commits:** `114babf` (NodeId + Graph<SentinelMeta>) · `16e6769` (display + emit + OnEvent) ·
+  `2816efe` (DelayTrigger) · `ea39647` (DeviceGate).
+- **Engine:** `v0.9.3`, pinned by tag. Nine releases today, every one from a real difference a
+  consumer hit rather than from speculation.
+
+### Done
+
+**The big slice that was reverted yesterday, landed.** `NodeKind` → `NodeId`, `Graph<SentinelMeta>`
+and `GraphNode`, all in one — because they are one change, not three. What made it an afternoon
+instead of a rewrite was three impls written FIRST and compiling on their own:
+`PartialEq<NodeKind> for NodeId` both ways, `From<NodeKind> for NodeId`, and an `AsKind` trait
+returning `Option`. The enum becomes a VIEW over the open identifier, so `n.kind == NodeKind::If`
+reads the way it always did at all sixteen sites, untouched.
+
+**All twelve inline node kinds are engine behaviours now** (`workflows/steps/`, one file each),
+bar `TimeGate` which is #207 and needs a decision. Both schedulers still exist, which is the
+correct state: `workflows/differential.rs` runs the same graph through both and requires the same
+node sequence. **Six shapes agree with `KNOWN_DIFFERENCES` empty.**
+
+**#205 and #206 verified in production** by the reporter, on their own graph.
+
+**#197 widened twice:** the cleanup was taking the Docker BUILD CACHE with the images (build:rust
+went 24 → 43 min, `Build Cache 0B` after every run — now `image prune` plus
+`builder prune --filter until=168h`), and the daemon died once with 24 GiB free, which produces
+the same wall of red as a full disk.
+
+### State
+
+139 tests, workspace clean, edge compiles, both lockfiles current. The catalog snapshot is
+UNTOUCHED across the whole session; the golden documents changed only in field ORDER, verified
+key-by-key (jsonb normalises order, the editor reads by key).
+
+In production: the extraction, #205, #206, Tauri iOS, engine v0.9.0. NOT yet: !145.
+
+### Pending / next
+
+1. **Merge !145** once CI is green (DelayTrigger + DeviceGate).
+2. **The scheduler swap** — `run_dag_eventful` → `ggraph_core::run`. Only possible now. Extend
+   the differential shape list first, then swap, then delete the inline blocks.
+3. **#207 TimeGate** — needs a decision, see Blockers.
+4. `repo.rs` and the 12 engine-owned migrations → a `ggraph-pg` adapter.
+
+### Blockers
+
+**#207 is a decision, not a task.** TimeGate spawns a thread that polls the database every 250 ms
+for its whole window. `DelayTrigger` has the same shape and uses a `work_jobs` row with
+`run_after`, the trailing edge arriving as a new run. Converting TimeGate means `out` stops firing
+in the same run and fires in a new one: run history splits, and **run-scoped variables do not
+survive** — that was #114, and the fix was a whole snapshot/restore mechanism which now lives in
+`steps/delay_trigger.rs` and can be copied. All three consequences are ones DelayTrigger already
+lives with, so none are hypothetical. Somebody still has to agree to them.
+
+### Refs
+
+`docs/ref/workflows.md`, `docs/plans/ggraph-engine-extraction.md`,
+`docs/plans/time-gate-should-not-hold-a-thread.md`, `docs/plans/disk-exhaustion-breaks-everything.md`,
+`crates/app-core/src/workflows/{steps/,differential.rs,registry.rs,host.rs,compat.rs}`.
+
+---
+
 ## 2026-08-24 — the graph engine leaves home, and bishop starts consuming it
 
 - **Branch:** `docs/handoff-engine-extraction` (this entry). Everything else is **merged to
