@@ -6,6 +6,77 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-24 — the graph engine leaves home, and bishop starts consuming it
+
+- **Branch:** `docs/handoff-engine-extraction` (this entry). Everything else is **merged to
+  `main`**: !133, !134, !135, !136, !137, !138.
+- **Commits:** `4f0fa6c` (ports) · `77297dd` (memoize + Edge + registry) · `e4c7b46` (#205 fix).
+  Engine repo: `dfcff65`, tags `v0.1.0` → `v0.5.2`.
+- **Engine repo:** [github.com/jackesdavid/graph-engine](https://github.com/jackesdavid/graph-engine)
+  — **public**, `ggraph-core`, 125 tests, no consumer named in it (CI greps for both domain
+  vocabulary and product names).
+
+### Done
+
+**The engine exists and is consumable.** Topology, open string identifiers, typed ports, values
+with an `Extern` escape hatch, the `Host` seam, the node registry, a scheduler with durable
+checkpointing, and 21 standard nodes. Proven from outside by a separate crate that pulls it over
+git, implements `Host` against the public API only, and runs a graph — kept as `examples/host.rs`
+and run by CI, not merely compiled.
+
+**bishop consumes it.** `PortType`, `Port`, `PortName`, `Edge`, the compatibility rule, and the
+91-kind registry that the catalog and wire validation read. `SentinelHost` implements `Host`;
+`compat` bridges `PortValue` ⇄ `Value` with one wrapper for all ten domain types.
+
+**`memoize` deleted end to end** — field, scheduler branch, API endpoint, editor switch, i18n,
+tests. Checked in production first: 249 nodes off, two on, both in a graph with no cycle, so the
+flag was never consulted.
+
+**#205 fixed** — the canvas highlight follows the branch that ran. #115 had fixed the Console
+line and stopped, because the highlight comes from `on_node` and the log from `on_log`, and only
+the second was deferred.
+
+**#197** — `clean-space` reclaims 29 G now (5.3 GiB → 38 GiB) and names what it left alone. The
+cause was never Docker: 22 G of Xcode symbol and derived caches the old task never looked at.
+
+### State
+
+`check:rust` now RUNS the engine's tests instead of only compiling them — that was the single
+most important change of the session and it is what made everything after it verifiable. 131
+tests green, `svelte-check` clean, edge compiles, both lockfiles regenerated. The extraction was
+**verified in production by the reporter**: one `value` pin on `tuya_control`, switch arms once,
+old graphs opening, runs identical.
+
+The #205 deploy (`e4c7b46`) was **still building** when this was written — the fix is merged but
+not yet confirmed live. The reporter has confirmed the bug still reproduces on the deploy before
+it, which is the expected before-half of the comparison.
+
+### Pending / next
+
+1. **Confirm #205 live** once `e4c7b46` deploys: same graph, Get on the dead arm no longer lights.
+2. **`Graph<SentinelMeta>`** — bishop's `Graph` (14 methods) onto the engine's, via an extension
+   trait. Prerequisite for the scheduler swap.
+3. **The scheduler swap** — the 19 inline `n.kind ==` blocks become `NodeStep`. Needs a
+   differential test (same graph, both schedulers, same node sequence) before it is safe.
+4. **One node per file** — 70 functions, cosmetic, a family per MR.
+5. **`ggraph-pg`** — the persistence adapter, plus the queue gaps the second product needs:
+   priority, tenant fairness, heartbeat, durable dead-letter. None blocks Sentinel.
+
+### Blockers
+
+None on the code. Two judgement calls left with the user: whether to rewrite the engine's git
+history to strip product names from old commit messages (would change every tag SHA and break
+bishop's lockfile — recommended against), and whether `GetCameraByName` / `GetRecipient` should
+get the same highlight deferral `GetVariable` now has.
+
+### Refs
+
+`docs/ref/workflows.md` (rewritten intro + a new "Highlight vs log" section + Build status),
+`docs/plans/ggraph-engine-extraction.md`, `docs/plans/pure-sources-run-on-dead-branches.md`,
+`docs/plans/disk-exhaustion-breaks-everything.md`.
+
+---
+
 ## 2026-08-17 — push worked end to end, after TWO stacked 403s
 
 - **Branch:** `main`, all merged and deployed. HEAD `1807f6a`.

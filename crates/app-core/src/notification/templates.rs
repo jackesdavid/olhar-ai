@@ -340,13 +340,7 @@ pub fn password_reset(
 /// Sent AFTER a password changes, to the address on the account. This exists for exactly one
 /// reader: the person whose account was just taken. Everyone else deletes it, which is fine — the
 /// mail costs nothing and not sending it costs a silent account takeover.
-pub fn password_changed(
-    to: &str,
-    name: &str,
-    when: &str,
-    support_url: &str,
-    lang: Lang,
-) -> Email {
+pub fn password_changed(to: &str, name: &str, when: &str, support_url: &str, lang: Lang) -> Email {
     let name = display_name(name, to);
     let text = lang.pick(
         format!(
@@ -430,7 +424,13 @@ mod tests {
     fn all() -> Vec<Email> {
         vec![
             welcome("jo@example.com", "Jo", "https://app.olharai.com", Lang::En),
-            password_reset("jo@example.com", "Jo", "https://app.olharai.com/reset?t=abc", 30, Lang::En),
+            password_reset(
+                "jo@example.com",
+                "Jo",
+                "https://app.olharai.com/reset?t=abc",
+                30,
+                Lang::En,
+            ),
             password_changed(
                 "jo@example.com",
                 "Jo",
@@ -464,7 +464,10 @@ mod tests {
         for e in all() {
             let html = e.html.clone().unwrap_or_default();
             for banned in ["<style", "<link", "background-image", "@font-face"] {
-                assert!(!html.contains(banned), "{banned:?} must not appear in email html");
+                assert!(
+                    !html.contains(banned),
+                    "{banned:?} must not appear in email html"
+                );
             }
             assert_eq!(
                 html.matches("<img").count(),
@@ -531,9 +534,22 @@ mod tests {
     /// Colour survives only where it means STATE. Red appears on the takeover path and nowhere else.
     #[test]
     fn danger_colour_is_used_only_for_the_security_path() {
-        assert!(welcome("j@e.com", "Jo", "https://x", Lang::En).html.unwrap().find(DANGER).is_none());
-        assert!(password_reset("j@e.com", "Jo", "https://x", 30, Lang::En).html.unwrap().find(DANGER).is_none());
-        assert!(password_changed("j@e.com", "Jo", "now", "https://x", Lang::En).html.unwrap().contains(DANGER));
+        assert!(welcome("j@e.com", "Jo", "https://x", Lang::En)
+            .html
+            .unwrap()
+            .find(DANGER)
+            .is_none());
+        assert!(password_reset("j@e.com", "Jo", "https://x", 30, Lang::En)
+            .html
+            .unwrap()
+            .find(DANGER)
+            .is_none());
+        assert!(
+            password_changed("j@e.com", "Jo", "now", "https://x", Lang::En)
+                .html
+                .unwrap()
+                .contains(DANGER)
+        );
     }
 
     /// A template that ships an unsubstituted placeholder tells the customer the product is broken
@@ -544,7 +560,10 @@ mod tests {
             let html = e.html.unwrap_or_default();
             for body in [&e.text, &html] {
                 for marker in ["{}", "{{", "}}", "{name}", "{to}"] {
-                    assert!(!body.contains(marker), "placeholder {marker:?} left in: {body}");
+                    assert!(
+                        !body.contains(marker),
+                        "placeholder {marker:?} left in: {body}"
+                    );
                 }
             }
         }
@@ -556,8 +575,14 @@ mod tests {
     fn the_action_link_appears_in_both_parts() {
         let url = "https://app.olharai.com/reset?t=abc";
         let e = password_reset("jo@example.com", "Jo", url, 30, Lang::En);
-        assert!(e.text.contains(url), "reset link missing from the text part");
-        assert!(e.html.unwrap().contains(url), "reset link missing from html");
+        assert!(
+            e.text.contains(url),
+            "reset link missing from the text part"
+        );
+        assert!(
+            e.html.unwrap().contains(url),
+            "reset link missing from html"
+        );
     }
 
     /// A silently-expired link is indistinguishable from a broken one.

@@ -289,10 +289,7 @@ mod tests {
                 -p[0] * ya.sin() + p[2] * ya.cos(),
             );
             let (x2, y2) = (x1, y1 * pa.cos() + z1 * pa.sin());
-            let (x3, y3) = (
-                x2 * ra.cos() - y2 * ra.sin(),
-                x2 * ra.sin() + y2 * ra.cos(),
-            );
+            let (x3, y3) = (x2 * ra.cos() - y2 * ra.sin(), x2 * ra.sin() + y2 * ra.cos());
             // Weak perspective: drop z, offset into image coordinates.
             out[i] = [320.0 + x3, 240.0 + y3];
         }
@@ -363,7 +360,10 @@ mod tests {
     fn sharpness_handles_degenerate_boxes() {
         let frame = checkerboard(60, 60, 3);
         assert_eq!(sharpness_bgr(&frame, 60, 60, [0.0, 0.0, 2.0, 2.0]), 0.0);
-        assert_eq!(sharpness_bgr(&frame, 60, 60, [500.0, 500.0, 600.0, 600.0]), 0.0);
+        assert_eq!(
+            sharpness_bgr(&frame, 60, 60, [500.0, 500.0, 600.0, 600.0]),
+            0.0
+        );
         assert_eq!(sharpness_bgr(&[], 0, 0, [0.0, 0.0, 10.0, 10.0]), 0.0);
     }
 
@@ -421,7 +421,10 @@ mod tests {
         let mut previous = f32::NEG_INFINITY;
         for truth in [-50.0f32, -35.0, -20.0, -5.0, 5.0, 20.0, 35.0, 50.0] {
             let y = pose_from_kps(&project(truth, 0.0, 0.0, 1.0, 1.0)).yaw;
-            assert!(y > previous, "yaw not monotonic at {truth}°: {y} <= {previous}");
+            assert!(
+                y > previous,
+                "yaw not monotonic at {truth}°: {y} <= {previous}"
+            );
             previous = y;
         }
     }

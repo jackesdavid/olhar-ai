@@ -234,7 +234,9 @@ async fn tune_hnsw(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, candidates: i
         .execute(&mut **tx)
         .await
     {
-        log::debug!("faces: hnsw.iterative_scan unavailable ({e}) — falling back to post-filtering");
+        log::debug!(
+            "faces: hnsw.iterative_scan unavailable ({e}) — falling back to post-filtering"
+        );
     }
     if let Err(e) = sqlx::query(&format!("SET LOCAL hnsw.ef_search = {ef}"))
         .execute(&mut **tx)
@@ -278,7 +280,12 @@ pub struct PersonScore {
 ///
 /// `row_number()` ranks each identity's own embeddings so `mean_top3` averages its three nearest
 /// rather than everything that happened to be retrieved. Empty on error.
-pub fn recognize_people(db: &Db, tenant_id: Uuid, embedding: &[f32], top_n: i64) -> Vec<PersonScore> {
+pub fn recognize_people(
+    db: &Db,
+    tenant_id: Uuid,
+    embedding: &[f32],
+    top_n: i64,
+) -> Vec<PersonScore> {
     let pool = db.pool();
     let literal = vector_literal(embedding);
     let candidates = candidate_pool(top_n);
@@ -581,7 +588,11 @@ const IN_MEMORY_KNN_MAX: usize = 2000;
 /// for 1000 faces** against roughly 5 ms in Rust. The cost is not the arithmetic — it is a hash join
 /// emitting 45k rows that each carry two 2 KB vectors. So coherence is in memory for speed, and the
 /// price is the embedding footprint bounded by [`MAX_CLUSTER_N`].
-fn build_groups(items: &[(Face, Vec<f32>)], neighbours: &[Vec<usize>], eps: f32) -> Vec<Vec<usize>> {
+fn build_groups(
+    items: &[(Face, Vec<f32>)],
+    neighbours: &[Vec<usize>],
+    eps: f32,
+) -> Vec<Vec<usize>> {
     let n = items.len();
     let coherent: Vec<bool> = (0..n)
         .map(|i| coherence(items, &neighbours[i], eps) >= MIN_COHERENCE)
@@ -1602,7 +1613,10 @@ mod clustering_tests {
     }
 
     fn group_of<'a>(groups: &'a [Vec<usize>], idx: usize) -> &'a Vec<usize> {
-        groups.iter().find(|g| g.contains(&idx)).expect("indexed face is in some group")
+        groups
+            .iter()
+            .find(|g| g.contains(&idx))
+            .expect("indexed face is in some group")
     }
 
     /// Cluster with neighbours computed in memory. In production the edge list comes from the HNSW
@@ -1637,8 +1651,14 @@ mod clustering_tests {
         // Sanity: the setup really is the chaining case — the bridge reaches both sides, and the
         // sides do not reach each other. Without this the test could pass for the wrong reason.
         let d = |i: usize, j: usize| cosine_distance(&it[i].1, &it[j].1);
-        assert!(d(12, 0) <= 0.55 && d(12, 6) <= 0.55, "bridge must reach both identities");
-        assert!(d(0, 6) > 0.55, "the two identities must not be directly linked");
+        assert!(
+            d(12, 0) <= 0.55 && d(12, 6) <= 0.55,
+            "bridge must reach both identities"
+        );
+        assert!(
+            d(0, 6) > 0.55,
+            "the two identities must not be directly linked"
+        );
 
         let groups = groups_of(&it, 0.55);
         assert!(
@@ -1666,11 +1686,18 @@ mod clustering_tests {
     #[test]
     fn distant_identities_stay_separate() {
         let mut spec: Vec<(String, f32)> = Vec::new();
-        for i in 0..5 { spec.push((format!("A{i}"), i as f32 * 0.4)); }
-        for i in 0..5 { spec.push((format!("B{i}"), 80.0 + i as f32 * 0.4)); }
+        for i in 0..5 {
+            spec.push((format!("A{i}"), i as f32 * 0.4));
+        }
+        for i in 0..5 {
+            spec.push((format!("B{i}"), 80.0 + i as f32 * 0.4));
+        }
         let spec_refs: Vec<(&str, f32)> = spec.iter().map(|(a, b)| (a.as_str(), *b)).collect();
         let groups = groups_of(&items(&spec_refs), 0.55);
-        assert!(!group_of(&groups, 0).contains(&5), "distant identities merged: {groups:?}");
+        assert!(
+            !group_of(&groups, 0).contains(&5),
+            "distant identities merged: {groups:?}"
+        );
     }
 
     /// A lone face is its own cluster, not lost.

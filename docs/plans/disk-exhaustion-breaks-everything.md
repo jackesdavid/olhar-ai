@@ -85,3 +85,55 @@ the rebuild cost and delete it on a schedule. Decide which; today it is neither.
 
 ## Out of scope
 - Buying a bigger disk. It would postpone this, not answer it.
+
+---
+
+## Second measurement (2026-08-24) — the Docker numbers were not the cause
+
+It happened again, mid-session, and produced the exact failure mode described above: the shell
+tool could not write its own output file, so `df` itself returned `ENOSPC`.
+
+The 2026-08-18 measurement looked at Docker and found 24.79 GB of volumes. That is real, but it
+is not what fills this disk. `task clean-space` ran and reclaimed **791 MB**. Then a wider
+measurement found where the space actually is:
+
+| | Size | Reclaimable | Note |
+|---|---|---|---|
+| **Xcode `iOS DeviceSupport`** | **16 G** | all | a full symbol set per iOS build per device ever plugged in |
+| Xcode `DerivedData` | 6.1 G | all | |
+| `~/go/pkg/mod` | 6.8 G | all | |
+| `CoreSimulator/Devices` | 5.2 G | partly | `simctl delete unavailable` only |
+| `~/.npm` | 1.7 G | all | |
+| `~/.cargo/registry` | 1.2 G | all | keep `index`, drop `src` + `cache` |
+| Xcode `Archives` | 1.9 G | **no** | shipped builds; needed to symbolicate or resubmit |
+| `~/builds` (runner) | 1.9 G | **no** | clearing mid-job kills the job |
+
+`iOS DeviceSupport` alone is twenty times what the old task reclaimed, and it appeared the moment
+this repo started building on a phone (#144, #202). It regenerates on the next device connect —
+a few minutes, once.
+
+**Fixed:** `scripts/clean-space.sh` now covers all of the above. Measured on this machine:
+**29 G reclaimed, 5.3 GiB → 38 GiB free.**
+
+Two things the script does beyond deleting:
+
+- It names what it **left alone and why** — archives, simulator devices, runner workspaces,
+  Docker volumes. The last one is the 2026-08-18 finding, and it stays manual on purpose: the
+  local Postgres from `task db-up` lives there, and losing a dev database to a cleanup command
+  is a bad trade.
+- It prints the biggest directories still on disk. The complaint in the card title was that the
+  task could not reclaim the cause; the durable fix is that it now *reports* the cause, so the
+  next time the list is different it says so instead of claiming success.
+
+## The failure mode is still worth stating plainly
+
+**This machine is the CI runner.** When the disk fills, jobs do not fail with a compile error —
+the OrbStack daemon dies and every job reports `system failure: cannot connect to the Docker
+daemon`. Twice today that took out `check:media` and `check:tenant-isolation` on a merge request
+whose code was fine, and it reads exactly like a flake.
+
+## Still open
+
+- **Nobody is watching.** Everything above is a cure. There is no alert at, say, 15 GiB free, so
+  the first symptom is still a dead pipeline or a shell that cannot run `df`.
+- Docker volumes (24.79 GB, 72% reclaimable per the first measurement) remain manual.

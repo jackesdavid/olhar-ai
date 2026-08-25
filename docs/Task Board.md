@@ -20,6 +20,39 @@ kanban-plugin: board
 
 ## Bugs
 
+- [x] #206 Edge highlight follows the target node, not the arm that fired
+	  - Plan: [[edge-highlight-follows-the-target]]
+	  - `+page.svelte:3911` lights an edge when its TARGET is live, so with two branches
+	    converging on one node BOTH incoming edges animate. Reported on BotMessages.
+	  - The editor cannot fix it alone: `workflow-node` says a node ran and nothing has ever
+	    said HOW control reached it. Fix is `on_arm(node, port)` in the driver → a
+	    `workflow-arm` event → the editor lights an edge by its own (from, from_port).
+	  - Third bug in one family (#115, #205, #206): the editor inferring what the engine knew
+	    and did not publish. The scheduler is right in all three.
+	  - FIXED: `on_arm` in the driver → `workflow-arm` event → the editor lights an edge by its
+	    own (from, from_port). Test: both arms of an If wired to one node, only `false` is
+	    reported.
+
+- [x] #205 Pure sources activate on dead branches — the canvas is telling the truth
+	  - Plan: [[pure-sources-run-on-dead-branches]]
+	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
+	    Get Recipient / Get Camera light up (and RUN) on arms nobody took. Two of the four hit
+	    the database. No wrong data flows — the arm's consumers still don't run — but the run
+	    log implies the arm executed.
+	  - ROOT CAUSE FOUND: #115 already defers the Console line for a dead-branch Get and works.
+	    The canvas highlight comes from a DIFFERENT callback — `on_node` → `workflow-node` event
+	    → the editor's highlight controller — which has no deferral. Two callbacks, one fix.
+	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
+	    the activation: measured, that fails three tests including the #114/#115 one.
+	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
+	  - FIXED (!138, merged): a Get's `on_node` is held until a node that READS it runs, and
+	    emitted just before that node. Proven by reverting the fix and watching the new test
+	    fail on the exact node id. AGUARDA confirmação em produção — o deploy `e4c7b46` estava
+	    subindo quando a sessão foi salva; o repórter já confirmou que o bug reproduz no deploy
+	    anterior, que é a metade "antes" da comparação.
+	  - EM ABERTO: `GetCameraByName` e `GetRecipient` têm a mesma forma e continuam sem o
+	    adiamento, nos dois callbacks.
+
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]
 	  - Was missing from the board entirely while the plan still listed it open (P0).
@@ -27,6 +60,11 @@ kanban-plugin: board
 	    rotated from the box at all; MASTER_PASSWORD is deliberately the operator's call.
 - [ ] #197 Disk exhaustion breaks builds, and clean-space can't reclaim the cause
 	  - Plan: [[disk-exhaustion-breaks-everything]]
+	  - clean-space now reclaims the cause: 29 G on this machine, 5.3 GiB → 38 GiB free.
+	    The cause was never Docker — it was 22 G of Xcode symbol/derived caches, which the
+	    old task did not look at. It also reports what it left alone and what is still big.
+	  - REMAINS: nobody is watching. No alert at a low-water mark, so the first symptom is
+	    still a dead pipeline or a shell that cannot run `df`.
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
@@ -40,6 +78,9 @@ kanban-plugin: board
 	  - Plan: [[tauri-widget-and-deeplink]]
 	  - Depends on #202; BLOCKS retiring sentinel-mobile — pinned.ts is what writes the
 	    App Group the widget reads, so the shell needs a Rust write path first.
+- [ ] #202 Tauri v2 mobile — share the web app instead of maintaining a second UI
+	  - Plan: [[tauri-mobile-shared-web]]
+	  - Blocked until #185 (App Store readiness) lands — swapping the shell restarts it.
 - [ ] #201 Faces canvas background — match the workflow editor exactly
 	  - Plan: [[faces-canvas-editor-background]]
 - [ ] #200 Faces: one journey per task, delete means delete, then re-test from zero
@@ -135,6 +176,23 @@ kanban-plugin: board
 
 
 ## Generation
+
+- [ ] #204 ggraph — extrair a engine de grafos para repo próprio
+	  - Plan: [[ggraph-engine-extraction]]
+	  - Engine compartilhada com o Redoma (projeto novo). Repo: github.com/jackesdavid/graph-engine
+	  - Fase 0 (o oráculo) FEITA: `check:rust` agora RODA os 118 testes da engine, que antes eram
+	    só compilados; mais o snapshot do catálogo e os grafos-ouro. Sem isso o refactor não
+	    tinha rede nenhuma.
+	  - Fase 1 FEITA: o core roda grafos. 21 nós (um por arquivo), 117 testes, os dois guardas
+	    de agnosticismo no CI. Inclui o checkpoint durável, que era o maior risco da fase.
+	  - Achado que muda o plano: exec-stream e exec-durable NÃO são dois crates — é um
+	    scheduler e um enum de política. Ver a nota.
+	  - Fase 2 FEITA e VERIFICADA em produção: portas tipadas, Edge, regra de compatibilidade e
+	    os 91 kinds num registry da engine. O catálogo passou a responder certo para os seis nós
+	    de config — era um bug antigo: o endpoint lia a tabela estática e o scheduler a dinâmica.
+	  - PRÓXIMO: `Graph<SentinelMeta>`, depois a troca do scheduler (19 blocos inline viram
+	    NodeStep). A troca precisa de um teste diferencial — mesmo grafo, dois schedulers,
+	    mesma sequência de nós — antes de ser segura.
 
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]

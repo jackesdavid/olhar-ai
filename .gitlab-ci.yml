@@ -62,6 +62,21 @@ check:rust:
     # fixture missing four new fields) until #162 tried to add a test next to them. A suite that
     # cannot build is indistinguishable from a suite that passes.
     - cargo check --manifest-path sentinel-edge/Cargo.toml --all-targets
+    # The workflow engine's own tests. `--all-targets` above COMPILES these 118 and never RUNS
+    # them, which for a suite is the same as not having one: until this line the only `cargo
+    # test` in the whole pipeline was sql_prepare, tenant_isolation and the edge's media_smoke,
+    # and not one of them touches `workflows::`. A refactor of the engine had no oracle at all.
+    #
+    # No database service, deliberately. `Db::lazy` dials on first use with a 3s acquire timeout
+    # and every `repo::*` call in the engine swallows the failure, so the engine's semantics —
+    # branch routing, loop re-entry, dead-branch skipping, the value codec — are all exercised
+    # with no Postgres. Verified: these pass on a machine with nothing listening on 5432.
+    #
+    # Two of them are the contract with the Svelte editor and with saved customer graphs:
+    # `workflows::catalog` freezes what every node DECLARES (slug, label, ports, defaults) and
+    # `workflows::golden` freezes what a graph DOES. Both fail loudly with a one-line diff and
+    # both tell you how to regenerate if the change was intended.
+    - cargo test -p app-core --lib workflows
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

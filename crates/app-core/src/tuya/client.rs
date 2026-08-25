@@ -277,7 +277,6 @@ pub fn fetch_devices_typed(
     Ok(out)
 }
 
-
 /// A device's controllable functions, as JSON.
 ///
 /// TWO endpoints, in this order, because one of them does not work for a large class of real
@@ -491,9 +490,18 @@ pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Valu
         Ok(j) => j["result"].as_array().cloned().unwrap_or_default(),
         Err(e) => {
             log::warn!("tuya: status for {device_id} failed ({e}); trying the device detail");
-            let j = call(cfg, "GET", &format!("/v1.0/devices/{device_id}"), Some(&tok), None)
-                .map_err(String::from)?;
-            j["result"]["status"].as_array().cloned().unwrap_or_default()
+            let j = call(
+                cfg,
+                "GET",
+                &format!("/v1.0/devices/{device_id}"),
+                Some(&tok),
+                None,
+            )
+            .map_err(String::from)?;
+            j["result"]["status"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
         }
     };
     Ok(arr
@@ -501,4 +509,3 @@ pub fn get_status(cfg: &TuyaConfig, device_id: &str) -> Result<Vec<(String, Valu
         .filter_map(|s| Some((s["code"].as_str()?.to_string(), s["value"].clone())))
         .collect())
 }
-

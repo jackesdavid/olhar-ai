@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::db::Db;
 
 use super::domain::{Graph, PortType, RunStatus, TriggerSource};
+use crate::workflows::domain::types;
 
 /// On-disk shape of the legacy `workflows.json` — one object holding the graph array.
 #[derive(serde::Deserialize)]
@@ -143,7 +144,7 @@ pub fn rename_recipient(db: &Db, tenant_id: Uuid, old: &str, new: &str) -> usize
             }
         }
         for v in &mut g.variables {
-            if v.ty == crate::workflows::domain::PortType::Recipient
+            if v.ty == crate::workflows::domain::types::RECIPIENT
                 && v.default.as_deref() == Some(old)
             {
                 v.default = Some(new.to_string());
@@ -486,12 +487,12 @@ pub fn system_events() -> Vec<TenantEvent> {
             description: Some("Edge motion detection".to_string()),
             created_by_graph: None,
             fields: vec![
-                field("camera", PortType::Camera),
-                field("score", PortType::Num),
-                field("area", PortType::Num),
-                field("blobs", PortType::Num),
-                field("bbox", PortType::Bbox),
-                field("frame", PortType::Image),
+                field("camera", types::CAMERA),
+                field("score", types::NUM),
+                field("area", types::NUM),
+                field("blobs", types::NUM),
+                field("bbox", types::BBOX),
+                field("frame", types::IMAGE),
             ],
         },
         TenantEvent {
@@ -503,20 +504,20 @@ pub fn system_events() -> Vec<TenantEvent> {
             ),
             created_by_graph: None,
             fields: vec![
-                field("camera", PortType::Camera),
-                field("bbox", PortType::Bbox),
-                field("confidence", PortType::Num), // 0..100
-                field("face_width", PortType::Num), // face box width in source pixels
-                field("kps", PortType::Landmarks), // 5 YuNet landmarks, source px (#122; empty until edge emits)
+                field("camera", types::CAMERA),
+                field("bbox", types::BBOX),
+                field("confidence", types::NUM), // 0..100
+                field("face_width", types::NUM), // face box width in source pixels
+                field("kps", types::LANDMARKS), // 5 YuNet landmarks, source px (#122; empty until edge emits)
                 // Quality signals (#126) — the inputs a graph composes a gate from
                 // (`NumGte(blur) + NumLte(|yaw|) → And → Branch`). Exposed as ports rather than
                 // enforced in a node, for the same reason StoreFace only stores: the platform
                 // supplies the measurement, the tenant decides the threshold.
-                field("blur", PortType::Num), // sharpness at the embedder's input size; higher = sharper
-                field("yaw", PortType::Num),  // degrees; >0 = nose toward image right
-                field("pitch", PortType::Num), // degrees; >0 = tilted down
-                field("roll", PortType::Num), // degrees; >0 = clockwise in the image plane
-                field("frame", PortType::Image),
+                field("blur", types::NUM), // sharpness at the embedder's input size; higher = sharper
+                field("yaw", types::NUM),  // degrees; >0 = nose toward image right
+                field("pitch", types::NUM), // degrees; >0 = tilted down
+                field("roll", types::NUM), // degrees; >0 = clockwise in the image plane
+                field("frame", types::IMAGE),
             ],
         },
         // Camera reachability, as a first-class event so "tell me when a camera drops" is a graph
@@ -537,9 +538,9 @@ pub fn system_events() -> Vec<TenantEvent> {
             ),
             created_by_graph: None,
             fields: vec![
-                field("camera", PortType::Camera),
-                field("reason", PortType::Text),
-                field("detail", PortType::Text),
+                field("camera", types::CAMERA),
+                field("reason", types::TEXT),
+                field("detail", types::TEXT),
             ],
         },
         TenantEvent {
@@ -551,13 +552,13 @@ pub fn system_events() -> Vec<TenantEvent> {
             ),
             created_by_graph: None,
             fields: vec![
-                field("camera", PortType::Camera),
+                field("camera", types::CAMERA),
                 // How long it was down, so a graph can stay quiet about a 20-second blip and speak
                 // up about an hour — without every user having to build that logic themselves.
                 // Measured from the camera's last delivered frame, and ABSENT when it has never
                 // delivered one; a graph that gates on it should handle the missing case rather
                 // than assume 0, which would read as "no outage" for a camera that never worked.
-                field("offline_secs", PortType::Num),
+                field("offline_secs", types::NUM),
             ],
         },
         TenantEvent {
@@ -574,16 +575,16 @@ pub fn system_events() -> Vec<TenantEvent> {
             // "quota") is there for one that does. Before #162 this event only ever described the
             // quota, and a box whose volume was 99% full said nothing at all.
             fields: vec![
-                field("used_bytes", PortType::Num),
-                field("max_bytes", PortType::Num),
-                field("pct", PortType::Num),
-                field("path", PortType::Text),
-                field("reason", PortType::Text),
-                field("quota_pct", PortType::Num),
-                field("disk_pct", PortType::Num),
-                field("disk_free_bytes", PortType::Num),
-                field("disk_total_bytes", PortType::Num),
-                field("mount", PortType::Text),
+                field("used_bytes", types::NUM),
+                field("max_bytes", types::NUM),
+                field("pct", types::NUM),
+                field("path", types::TEXT),
+                field("reason", types::TEXT),
+                field("quota_pct", types::NUM),
+                field("disk_pct", types::NUM),
+                field("disk_free_bytes", types::NUM),
+                field("disk_total_bytes", types::NUM),
+                field("mount", types::TEXT),
             ],
         },
         // A paired Telegram user sent a message. The notification service enqueues this from its
@@ -597,11 +598,11 @@ pub fn system_events() -> Vec<TenantEvent> {
             description: Some("A paired Telegram user sent a message".to_string()),
             created_by_graph: None,
             fields: vec![
-                field("text", PortType::Text),
-                field("chat_id", PortType::Num),
-                field("from_name", PortType::Text),
-                field("command", PortType::Text),
-                field("args", PortType::Text),
+                field("text", types::TEXT),
+                field("chat_id", types::NUM),
+                field("from_name", types::TEXT),
+                field("command", types::TEXT),
+                field("args", types::TEXT),
             ],
         },
         // The edge object tracker started tracking a new entity in a camera's view (card: edge
@@ -616,12 +617,12 @@ pub fn system_events() -> Vec<TenantEvent> {
             description: Some("The tracker started tracking a new object in view".to_string()),
             created_by_graph: None,
             fields: vec![
-                field("uuid", PortType::Text),
-                field("class", PortType::Text),
-                field("camera", PortType::Camera),
-                field("bbox", PortType::Bbox),
-                field("count", PortType::Num),
-                field("zone", PortType::Text),
+                field("uuid", types::TEXT),
+                field("class", types::TEXT),
+                field("camera", types::CAMERA),
+                field("bbox", types::BBOX),
+                field("count", types::NUM),
+                field("zone", types::TEXT),
             ],
         },
         // A tracked entity left the camera's view (dropped after the tracker's lost-buffer window)
@@ -634,12 +635,12 @@ pub fn system_events() -> Vec<TenantEvent> {
             description: Some("A tracked object left the camera's view".to_string()),
             created_by_graph: None,
             fields: vec![
-                field("uuid", PortType::Text),
-                field("class", PortType::Text),
-                field("camera", PortType::Camera),
-                field("dwell_secs", PortType::Num),
-                field("count", PortType::Num),
-                field("zone", PortType::Text),
+                field("uuid", types::TEXT),
+                field("class", types::TEXT),
+                field("camera", types::CAMERA),
+                field("dwell_secs", types::NUM),
+                field("count", types::NUM),
+                field("zone", types::TEXT),
             ],
         },
         // A tracked entity's centre crossed a configured virtual line (card: edge tracking, P3).
@@ -652,12 +653,12 @@ pub fn system_events() -> Vec<TenantEvent> {
             description: Some("A tracked object crossed a configured virtual line".to_string()),
             created_by_graph: None,
             fields: vec![
-                field("uuid", PortType::Text),
-                field("class", PortType::Text),
-                field("camera", PortType::Camera),
-                field("line", PortType::Text),
-                field("direction", PortType::Text),
-                field("count", PortType::Num),
+                field("uuid", types::TEXT),
+                field("class", types::TEXT),
+                field("camera", types::CAMERA),
+                field("line", types::TEXT),
+                field("direction", types::TEXT),
+                field("count", types::NUM),
             ],
         },
     ]

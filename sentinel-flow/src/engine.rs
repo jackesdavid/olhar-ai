@@ -251,7 +251,7 @@ fn execute_run(
         for decl in &graph.variables {
             if let Some(raw) = input_overrides.get(&decl.name) {
                 if let Some(pv) =
-                    app_core::workflows::node::parse_variable_value(decl.ty, raw, &ctx)
+                    app_core::workflows::node::parse_variable_value(decl.ty.clone(), raw, &ctx)
                 {
                     ctx.variables.lock().unwrap().insert(decl.name.clone(), pv);
                 }
@@ -293,6 +293,21 @@ fn execute_run(
             });
         }
     };
+    // An exec arm fired: the only signal that says WHICH edge control travelled along. The
+    // editor lights an edge from its own (from, from_port); without this it lights every edge
+    // into a live node, which is right by accident until two branches converge on one (#206).
+    let arm_prog = Arc::clone(&prog);
+    let mut on_arm = |nid: u32, port: &str| {
+        events::publish(
+            &arm_prog.events,
+            "workflow-arm",
+            serde_json::json!({
+                "tenant": tenant, "graph": graph_id, "node": nid,
+                "port": port, "run_id": run_id
+            }),
+        );
+    };
+
     let log_state = Arc::clone(state);
     let log_logs = logs.clone();
     let mut on_log = |nid: u32, msg: &str, ms: u128| {
@@ -336,10 +351,18 @@ fn execute_run(
             e,
             entry_payload,
             &mut on_node,
+            &mut on_arm,
             &mut on_log,
             &mut emit,
         ),
-        None => workflows::run_dag_eventful(graph, &ctx, &mut on_node, &mut on_log, &mut emit),
+        None => workflows::run_dag_eventful(
+            graph,
+            &ctx,
+            &mut on_node,
+            &mut on_arm,
+            &mut on_log,
+            &mut emit,
+        ),
     };
     drop(ctx); // closes the UI channel → its drain thread ends
     let _ = drain.join();

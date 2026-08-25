@@ -180,10 +180,7 @@ pub fn send_with(cfg: &EmailConfig, email: &Email) -> Result<(), EmailError> {
     // Some providers (and a local test relay) take no credentials; sending an empty username is an
     // auth failure rather than an anonymous send, so only authenticate when we actually have one.
     if !cfg.user.is_empty() {
-        transport = transport.credentials(Credentials::new(
-            cfg.user.clone(),
-            cfg.password.clone(),
-        ));
+        transport = transport.credentials(Credentials::new(cfg.user.clone(), cfg.password.clone()));
     }
 
     transport
@@ -256,7 +253,10 @@ mod tests {
     #[test]
     fn port_465_selects_implicit_tls() {
         with_env(
-            &[("SMTP_HOST", Some("smtp.example.com")), ("SMTP_PORT", Some("465"))],
+            &[
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", Some("465")),
+            ],
             || assert!(EmailConfig::from_env().unwrap().implicit_tls()),
         );
     }
@@ -265,7 +265,10 @@ mod tests {
     #[test]
     fn an_unparseable_port_is_not_configured() {
         with_env(
-            &[("SMTP_HOST", Some("smtp.example.com")), ("SMTP_PORT", Some("five-eight-seven"))],
+            &[
+                ("SMTP_HOST", Some("smtp.example.com")),
+                ("SMTP_PORT", Some("five-eight-seven")),
+            ],
             || assert!(EmailConfig::from_env().is_none()),
         );
     }

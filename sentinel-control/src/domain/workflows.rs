@@ -80,7 +80,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/workflows/:id/nodes/:nid/move", put(move_node))
         .route("/workflows/:id/nodes/:nid/config", put(set_node_config))
-        .route("/workflows/:id/nodes/:nid/memoize", put(set_node_memoize))
         .route("/workflows/:id/edges", post(add_edge))
         .route(
             "/workflows/:id/edges/:idx",
@@ -372,43 +371,13 @@ async fn list(
 }
 
 /// Static node metadata (kinds + typed ports + default config) for the palette.
+///
+/// The projection lives in `app_core::workflows::catalog` so a lib test can snapshot it — this
+/// is the only contract between the Rust node set and the Svelte editor, and it used to be
+/// verified by nothing.
 async fn catalog(UserClaims(c): UserClaims) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "workflows.read")?;
-    let ports = |list: &[workflows::Port]| {
-        list.iter()
-            .map(|p| json!({ "name": p.name, "type": serde_json::to_value(p.ty).unwrap_or(Value::Null), "required": p.required }))
-            .collect::<Vec<_>>()
-    };
-    let with_exec = |exec: &[workflows::Port], list: &[workflows::Port]| {
-        let mut v = ports(exec);
-        v.extend(ports(list));
-        v
-    };
-    let exec_in = [workflows::EXEC_IN];
-    let kinds = WfNodeKind::ALL
-        .iter()
-        .map(|k| {
-            // Pure data/logic nodes have no exec pins — omit exec_in/exec_out entirely
-            // so the UI can hide the exec circles and the engine knows to pull them.
-            let (inputs, outputs) = if k.is_pure() {
-                (ports(k.input_ports()), ports(k.output_ports()))
-            } else {
-                (
-                    with_exec(&exec_in, k.input_ports()),
-                    with_exec(k.exec_out_ports(), k.output_ports()),
-                )
-            };
-            json!({
-                "slug": k.slug(),
-                "label": k.label(),
-                "category": k.category(),
-                "inputs": inputs,
-                "outputs": outputs,
-                "default_config": k.default_config(),
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({ "kinds": kinds })))
+    Ok(Json(workflows::catalog_json()))
 }
 
 /// Live run state per graph id (`{ running, current }`) for this tenant from sentinel-flow.
@@ -1526,30 +1495,6 @@ async fn save_graph(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct MemoizeReq {
-    memoize: bool,
-}
-
-async fn set_node_memoize(
-    UserClaims(c): UserClaims,
-    State(st): State<AppState>,
-    Path((id, nid)): Path<(uuid::Uuid, u32)>,
-    Json(b): Json<MemoizeReq>,
-) -> Result<StatusCode, ApiErr> {
-    auth::require(&c, "workflows.write")?;
-    let tid = tenant_of(&c)?;
-    mutate(&st, tid, move |wf| {
-        wf.graph_mut(id)
-            .ok_or("graph not found")?
-            .node_mut(nid)
-            .ok_or("node not found")?
-            .memoize = b.memoize;
-        Ok(())
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
 #[derive(Deserialize)]
 struct AddEdgeReq {

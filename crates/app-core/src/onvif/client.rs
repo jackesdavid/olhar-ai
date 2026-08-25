@@ -220,7 +220,6 @@ fn envelope(header: &str, body: &str) -> String {
     )
 }
 
-
 /// Insert `user:pass@` into an `rtsp://` URL unless it already carries creds.
 /// Shared by the snapshot path and the live-stream path.
 ///

@@ -185,8 +185,6 @@ export const workflowEditor = {
     generalCategory: "General",
     removeField: "Remove field",
     removeArm: "Remove arm",
-    memoizeHelp:
-      "On: cache this node's output for the run and reuse it. Off: recompute every time the node runs — required for loop bodies and live sources (e.g. Get current frame).",
     tabDetails: "Details",
     tabProperties: "Properties",
     tabVariables: "Variables",
@@ -387,8 +385,6 @@ export const workflowEditor = {
     generalCategory: "Geral",
     removeField: "Remover campo",
     removeArm: "Remover ramo",
-    memoizeHelp:
-      "Ligado: guarda a saída deste nó para a execução e reutiliza. Desligado: recalcula toda vez que o nó roda — necessário para corpos de laço e fontes ao vivo (por exemplo, Obter quadro atual).",
     tabDetails: "Detalhes",
     tabProperties: "Propriedades",
     tabVariables: "Variáveis",

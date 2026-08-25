@@ -32,6 +32,7 @@ use base64::Engine as _;
 use super::domain::{NodeKind, Port, PortType};
 use crate::agent::tools::ToolContext;
 use crate::device_actions as dev_actions;
+use crate::workflows::domain::types;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -216,7 +217,8 @@ pub type PortValues = HashMap<String, PortValue>;
 /// Convert a node's config literal into a typed value for an UNCONNECTED input port.
 /// Empty text / missing keys / `Image` ports yield `None` (treated as "not provided").
 pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
-    literal_for_named(config, port.name, port.ty)
+    let Port { name, ty, .. } = port;
+    literal_for_named(config, name.as_str(), ty)
 }
 
 /// As [`literal_for`], but by port name + type — so config-derived ports (with owned
@@ -224,88 +226,130 @@ pub fn literal_for(config: &Value, port: Port) -> Option<PortValue> {
 /// config literal (their value arrives by wire), so this returns `None` for them.
 pub fn literal_for_named(config: &Value, name: &str, ty: PortType) -> Option<PortValue> {
     let v = config.get(name)?;
-    match ty {
-        PortType::Text => {
-            let s = v.as_str()?;
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(PortValue::Text(s.to_string()))
-            }
+
+    // An if-chain rather than a `match`: a port type is an open string now, so there is nothing
+    // to match exhaustively on. The types that fall through to `None` are listed at the bottom
+    // with the reason, and the test below asserts none of them was forgotten.
+    if ty == types::TEXT || ty == types::RECIPIENT {
+        let s = v.as_str()?;
+        if s.trim().is_empty() {
+            return None;
         }
-        PortType::Num => {
-            if let Some(n) = v.as_i64() {
-                Some(PortValue::Num(n))
-            } else {
-                v.as_str()
-                    .and_then(|s| s.trim().parse::<i64>().ok())
-                    .map(PortValue::Num)
-            }
-        }
-        PortType::Bool => v.as_bool().map(PortValue::Bool),
-        // An image literal is a file path the user picked; read it at run time.
-        PortType::Image => v
+        // A recipient literal is the recipient's label — the same thing `GetRecipient` produces.
+        return Some(if ty == types::RECIPIENT {
+            PortValue::Recipient(s.to_string())
+        } else {
+            PortValue::Text(s.to_string())
+        });
+    }
+
+    if ty == types::NUM {
+        return v
+            .as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+            .map(PortValue::Num);
+    }
+
+    if ty == types::BOOL {
+        return v.as_bool().map(PortValue::Bool);
+    }
+
+    // An image or file literal is a path the user picked; read it at run time.
+    if ty == types::IMAGE {
+        return v
             .as_str()
             .filter(|s| !s.trim().is_empty())
             .and_then(|p| std::fs::read(p).ok())
-            .map(PortValue::Image),
-        // A recipient literal is the recipient's label (also produced by GetRecipient).
-        PortType::Recipient => {
-            let s = v.as_str()?;
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(PortValue::Recipient(s.to_string()))
-            }
-        }
-        // A dictionary literal is a JSON object of string→string in config.
-        PortType::Dictionary => {
-            let obj = v.as_object()?;
-            if obj.is_empty() {
-                return None;
-            }
-            let pairs = obj
-                .iter()
-                .map(|(k, val)| {
-                    let s = val
-                        .as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| val.to_string());
-                    (k.clone(), s)
-                })
-                .collect();
-            Some(PortValue::Dict(pairs))
-        }
-        // A file literal is a path the user picked; read it at run time.
-        PortType::File => v
+            .map(PortValue::Image);
+    }
+
+    if ty == types::FILE {
+        return v
             .as_str()
             .filter(|s| !s.trim().is_empty())
             .and_then(read_file_val)
-            .map(PortValue::File),
-        // Control-flow ports never carry a value.
-        PortType::Exec => None,
-        // Camera literals are resolved by the engine (needs sys.devices); not a plain config value.
-        PortType::Camera => None,
-        // A Table literal is a dictionary uuid; resolving it to its rows needs sys.dictionaries,
-        // so the engine resolves it (like Camera), not this pure config reader.
-        PortType::Table => None,
-        // An embedding is produced by FaceEmbedding — never a config literal.
-        PortType::Embedding => None,
-        // Landmarks arrive from OnEvent("face_detected") (#122) — never a config literal.
-        PortType::Landmarks => None,
-        // Arrays / detection elements / the Any wildcard are produced by upstream nodes
-        // (or, for ForEach `items`, parsed from text in the engine) — never a config literal.
-        PortType::TextArray
-        | PortType::NumArray
-        | PortType::PersonArray
-        | PortType::FaceArray
-        | PortType::Person
-        | PortType::Face
-        | PortType::Bbox
-        | PortType::Region
-        | PortType::TrackedObject
-        | PortType::TrackedObjectArray
-        | PortType::Any => None,
+            .map(PortValue::File);
+    }
+
+    // A dictionary literal is a JSON object of string→string in config.
+    if ty == types::DICTIONARY {
+        let obj = v.as_object()?;
+        if obj.is_empty() {
+            return None;
+        }
+        let pairs = obj
+            .iter()
+            .map(|(k, val)| {
+                let s = val
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| val.to_string());
+                (k.clone(), s)
+            })
+            .collect();
+        return Some(PortValue::Dict(pairs));
+    }
+
+    // Everything else has no config literal, for one of three reasons:
+    //
+    //   Exec                        control flow carries no value at all;
+    //   Camera, Table               resolved by the engine, which has `sys`; not a pure read;
+    //   Embedding, Landmarks,       produced by an upstream node — a face embedding is not
+    //   arrays, detections, Any     something anybody types into an inspector.
+    None
+}
+
+#[cfg(test)]
+mod literal_coverage {
+    use super::*;
+
+    /// Every port type this product declares is either handled above or deliberately absent.
+    ///
+    /// The `match` this replaced was exhaustive by construction; an if-chain is not, so a new
+    /// port type would silently fall through to `None`. This is the compiler check, re-stated
+    /// as a test: it fails when a type is added and nobody decided what its literal means.
+    #[test]
+    fn every_port_type_is_accounted_for() {
+        let has_literal = [
+            types::TEXT,
+            types::RECIPIENT,
+            types::NUM,
+            types::BOOL,
+            types::IMAGE,
+            types::FILE,
+            types::DICTIONARY,
+        ];
+        let no_literal = [
+            types::EXEC,
+            types::CAMERA,
+            types::TABLE,
+            types::EMBEDDING,
+            types::LANDMARKS,
+            types::TEXT_ARRAY,
+            types::NUM_ARRAY,
+            types::PERSON_ARRAY,
+            types::FACE_ARRAY,
+            types::PERSON,
+            types::FACE,
+            types::BBOX,
+            types::REGION,
+            types::TRACKED_OBJECT,
+            types::TRACKED_OBJECT_ARRAY,
+            types::ANY,
+        ];
+        assert_eq!(
+            has_literal.len() + no_literal.len(),
+            23,
+            "a port type was added or removed and this decision was not revisited"
+        );
+        // The ones with no literal must return None even when config holds something for them.
+        let cfg = serde_json::json!({ "x": "something" });
+        for ty in no_literal {
+            assert!(
+                literal_for_named(&cfg, "x", ty.clone()).is_none(),
+                "{ty} must not take a literal from config"
+            );
+        }
     }
 }
 
@@ -347,7 +391,7 @@ pub fn seed_variable_defaults(vars: &[crate::workflows::domain::VariableDecl], s
         else {
             continue;
         };
-        if let Some(pv) = parse_variable_value(v.ty, raw, sys) {
+        if let Some(pv) = parse_variable_value(v.ty.clone(), raw, sys) {
             seeded.push((v.name.clone(), pv));
         }
     }
@@ -370,25 +414,121 @@ pub fn parse_variable_value(
     raw: &str,
     sys: &ToolContext,
 ) -> Option<PortValue> {
-    use crate::workflows::domain::PortType;
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
     }
-    Some(match ty {
-        PortType::Text => PortValue::Text(raw.to_string()),
-        PortType::Recipient => PortValue::Recipient(raw.to_string()),
-        PortType::Num => PortValue::Num(raw.parse::<i64>().ok()?),
-        PortType::Bool => PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")),
-        PortType::Camera => PortValue::Camera(resolve_camera_entity(raw, sys)?),
-        // A Table default/override is a dictionary id; resolve it from the run-start snapshot.
-        PortType::Table => PortValue::Table(sys.dictionaries.get(raw)?.clone()),
-        _ => return None,
-    })
+    if ty == types::TEXT {
+        Some(PortValue::Text(raw.to_string()))
+    } else if ty == types::RECIPIENT {
+        Some(PortValue::Recipient(raw.to_string()))
+    } else if ty == types::NUM {
+        raw.parse::<i64>().ok().map(PortValue::Num)
+    } else if ty == types::BOOL {
+        Some(PortValue::Bool(matches!(raw, "true" | "1" | "yes" | "on")))
+    } else if ty == types::CAMERA {
+        resolve_camera_entity(raw, sys).map(PortValue::Camera)
+    } else if ty == types::TABLE {
+        // A Table default is a dictionary id; resolve it from the run-start snapshot.
+        sys.dictionaries.get(raw).cloned().map(PortValue::Table)
+    } else {
+        // Everything else is produced upstream, not typed into a variable's default.
+        None
+    }
+}
+
+/// Which exec arm(s) a node fires.
+///
+/// Extracted from the scheduler so there is exactly one answer to "where does control go next".
+/// It has to be callable from two places now — this product's scheduler and the engine's
+/// `NodeRoute` — and two copies of a routing rule is how an editor starts drawing a live edge
+/// the run never takes.
+///
+/// `outputs` matters for the two kinds that decide by asking a model: the choice is computed
+/// during the run and left on an output port, so the arm cannot be worked out from the inputs
+/// alone.
+pub fn arms_for(
+    kind: NodeKind,
+    config: &Value,
+    inputs: &PortValues,
+    outputs: &PortValues,
+) -> Vec<String> {
+    let one = |s: &str| vec![s.to_string()];
+    match kind {
+        NodeKind::If => {
+            let cond = inputs
+                .get("condition")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            one(if cond { "true" } else { "false" })
+        }
+        NodeKind::AskAi => {
+            let answer = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            one(if answer { "true" } else { "false" })
+        }
+        NodeKind::StringSwitch => {
+            let val = inputs
+                .get("value")
+                .and_then(PortValue::as_text)
+                .unwrap_or_default();
+            let arms = crate::workflows::domain::string_switch_arms(config);
+            if arms.iter().any(|a| a == val) {
+                one(val)
+            } else {
+                one("default")
+            }
+        }
+        NodeKind::AiSwitch => {
+            // The model's choice is validated against the configured arms before it is trusted:
+            // a model naming an arm that does not exist would otherwise fire nothing at all.
+            let arm = outputs
+                .get("arm")
+                .and_then(PortValue::as_text)
+                .unwrap_or("default");
+            let arms = crate::workflows::domain::string_switch_arms(config);
+            if arm != "default" && arms.iter().any(|a| a == arm) {
+                one(arm)
+            } else {
+                one("default")
+            }
+        }
+        NodeKind::CameraSwitch => {
+            let Some(cam) = inputs.get("camera").and_then(PortValue::as_camera) else {
+                return one("default");
+            };
+            let arms = crate::workflows::domain::camera_switch_arms(config);
+            arms.iter()
+                .position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id))
+                .map(|i| vec![format!("arm_{}", i + 1)])
+                .unwrap_or_else(|| one("default"))
+        }
+        // Everything else fires every arm it declares, which for almost every node is the single
+        // "and then" pin.
+        k => k
+            .exec_out_ports()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect(),
+    }
+}
+
+/// The kinds that CHOOSE an arm rather than firing all of them.
+pub fn is_routing(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::If
+            | NodeKind::AskAi
+            | NodeKind::StringSwitch
+            | NodeKind::AiSwitch
+            | NodeKind::CameraSwitch
+    )
 }
 
 /// Resolve a `Table` config literal (the dropdown-stored dictionary id) to a `PortValue::Table`,
-/// from the run-start dictionaries snapshot. Called by the engine when a `PortType::Table` input
+/// from the run-start dictionaries snapshot. Called by the engine when a `types::TABLE` input
 /// port has no wired edge — the counterpart to [`resolve_camera_literal`].
 pub fn resolve_table_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
     let id = config
@@ -402,7 +542,7 @@ pub fn resolve_table_literal(config: &Value, key: &str, sys: &ToolContext) -> Op
 }
 
 /// Resolve a `Camera` config literal (the dropdown-stored device id) to a `PortValue::Camera`.
-/// Called by the engine when a `PortType::Camera` input port has no wired edge.
+/// Called by the engine when a `types::CAMERA` input port has no wired edge.
 pub fn resolve_camera_literal(config: &Value, key: &str, sys: &ToolContext) -> Option<PortValue> {
     let id = config
         .get(key)
@@ -422,51 +562,49 @@ pub fn seed_event_payload(
     ports: &[crate::workflows::domain::ResolvedPort],
     sys: &ToolContext,
 ) -> PortValues {
-    use crate::workflows::domain::{BBox, PortType};
+    use crate::workflows::domain::BBox;
     let mut out = payload.clone();
     for port in ports {
-        match port.ty {
-            PortType::Camera => {
-                if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
-                    if let Some(cam) = resolve_camera_entity(&s, sys) {
-                        out.insert(port.name.clone(), PortValue::Camera(cam));
-                    }
+        // An if-chain: port types are open strings, so there is nothing to match exhaustively.
+        // Anything not named here arrives already in the right shape and is left alone.
+        let name = port.name.as_str();
+        if port.ty == types::CAMERA {
+            if let Some(PortValue::Text(s)) = out.get(name).cloned() {
+                if let Some(cam) = resolve_camera_entity(&s, sys) {
+                    out.insert(name.to_string(), PortValue::Camera(cam));
                 }
             }
-            PortType::Bbox => {
-                if let Some(PortValue::List(items)) = out.get(&port.name).cloned() {
-                    let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
-                    if let Some(b) = BBox::from_xyxy_slice(&nums) {
-                        out.insert(port.name.clone(), PortValue::Bbox(b));
-                    }
+        } else if port.ty == types::BBOX {
+            if let Some(PortValue::List(items)) = out.get(name).cloned() {
+                let nums: Vec<i64> = items.iter().filter_map(PortValue::as_num).collect();
+                if let Some(b) = BBox::from_xyxy_slice(&nums) {
+                    out.insert(name.to_string(), PortValue::Bbox(b));
                 }
             }
+        } else if port.ty == types::IMAGE {
             // An Image-typed event field (e.g. `face_detected.frame`) arrives base64-encoded —
             // JSON has no byte type, so the generic payload decoder makes it a `Text`. Decode it
-            // here or every node that requires an image ("missing required input 'image'") rejects
-            // it, however the graph is wired. A value that isn't valid base64 leaves the port
-            // unfilled rather than handing downstream nodes garbage bytes.
-            PortType::Image => {
-                if let Some(PortValue::Text(s)) = out.get(&port.name).cloned() {
-                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s.trim()) {
-                        if !bytes.is_empty() {
-                            out.insert(port.name.clone(), PortValue::Image(bytes));
-                        }
+            // here or every node that requires an image rejects it ("missing required input
+            // 'image'"), however the graph is wired. Invalid base64 leaves the port unfilled
+            // rather than handing downstream nodes garbage bytes.
+            if let Some(PortValue::Text(s)) = out.get(name).cloned() {
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s.trim()) {
+                    if !bytes.is_empty() {
+                        out.insert(name.to_string(), PortValue::Image(bytes));
                     }
                 }
             }
-            // `kps` arrives as a List of `[x,y]` pairs (each pair itself a 2-element List of nums,
-            // or a flat `[x0,y0,x1,y1,…]`) → PortValue::Landmarks (source pixels, #122). A malformed
-            // or empty payload just leaves the port unfilled (the embed node then falls back).
-            PortType::Landmarks => {
-                if let Some(PortValue::List(items)) = out.get(&port.name).cloned() {
-                    let pts = landmark_points(&items);
-                    if !pts.is_empty() {
-                        out.insert(port.name.clone(), PortValue::Landmarks(pts));
-                    }
+        } else if port.ty == types::LANDMARKS {
+            // `kps` arrives as a List of `[x,y]` pairs (each pair itself a 2-element List of
+            // nums, or a flat `[x0,y0,x1,y1,…]`) → Landmarks in source pixels (#122). A
+            // malformed or empty payload just leaves the port unfilled and the embed node falls
+            // back.
+            if let Some(PortValue::List(items)) = out.get(name).cloned() {
+                let pts = landmark_points(&items);
+                if !pts.is_empty() {
+                    out.insert(name.to_string(), PortValue::Landmarks(pts));
                 }
             }
-            _ => {}
         }
     }
     out
@@ -1401,6 +1539,7 @@ pub(crate) fn to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::super::domain::NodeKind;
     use super::*;
+    use crate::workflows::domain::PortName;
     use serde_json::json;
 
     fn resolved(
@@ -1408,7 +1547,7 @@ mod tests {
         ty: crate::workflows::domain::PortType,
     ) -> crate::workflows::domain::ResolvedPort {
         crate::workflows::domain::ResolvedPort {
-            name: name.to_string(),
+            name: PortName::new(name),
             ty,
             required: false,
         }
@@ -1426,7 +1565,7 @@ mod tests {
 
         let out = seed_event_payload(
             &payload,
-            &[resolved("frame", crate::workflows::domain::PortType::Image)],
+            &[resolved("frame", crate::workflows::domain::types::IMAGE)],
             &test_ctx(),
         );
 
@@ -1448,7 +1587,7 @@ mod tests {
 
         let out = seed_event_payload(
             &payload,
-            &[resolved("frame", crate::workflows::domain::PortType::Image)],
+            &[resolved("frame", crate::workflows::domain::types::IMAGE)],
             &test_ctx(),
         );
 
@@ -1469,39 +1608,38 @@ mod tests {
 
     #[test]
     fn parse_variable_value_matches_default_seeding() {
-        use crate::workflows::domain::PortType;
         let sys = test_ctx();
         // The types a manual-run input can carry — parsed identically to a stored default.
         assert!(
-            matches!(parse_variable_value(PortType::Text, "hi", &sys), Some(PortValue::Text(t)) if t == "hi")
+            matches!(parse_variable_value(types::TEXT, "hi", &sys), Some(PortValue::Text(t)) if t == "hi")
         );
         assert!(matches!(
-            parse_variable_value(PortType::Num, "42", &sys),
+            parse_variable_value(types::NUM, "42", &sys),
             Some(PortValue::Num(42))
         ));
         assert!(matches!(
-            parse_variable_value(PortType::Bool, "true", &sys),
+            parse_variable_value(types::BOOL, "true", &sys),
             Some(PortValue::Bool(true))
         ));
         assert!(matches!(
-            parse_variable_value(PortType::Bool, "nope", &sys),
+            parse_variable_value(types::BOOL, "nope", &sys),
             Some(PortValue::Bool(false))
         ));
         assert!(
-            matches!(parse_variable_value(PortType::Recipient, "ops", &sys), Some(PortValue::Recipient(r)) if r == "ops")
+            matches!(parse_variable_value(types::RECIPIENT, "ops", &sys), Some(PortValue::Recipient(r)) if r == "ops")
         );
         // Rejections fall back to the Get's type-zero, never a wrong value or a run failure.
-        assert!(parse_variable_value(PortType::Num, "not-a-number", &sys).is_none());
+        assert!(parse_variable_value(types::NUM, "not-a-number", &sys).is_none());
         assert!(
-            parse_variable_value(PortType::Text, "   ", &sys).is_none(),
+            parse_variable_value(types::TEXT, "   ", &sys).is_none(),
             "blank is no value"
         );
         assert!(
-            parse_variable_value(PortType::Image, "x", &sys).is_none(),
+            parse_variable_value(types::IMAGE, "x", &sys).is_none(),
             "non-defaultable type"
         );
         // Camera needs a resolvable device; the empty test ctx has none → None (not a crash).
-        assert!(parse_variable_value(PortType::Camera, "192.168.1.1", &sys).is_none());
+        assert!(parse_variable_value(types::CAMERA, "192.168.1.1", &sys).is_none());
     }
 
     #[test]
@@ -1591,18 +1729,18 @@ mod tests {
     fn literal_for_coerces_and_skips_empty() {
         let cfg = json!({ "camera": "front", "blank": "  ", "n": "7" });
         let text = Port {
-            name: "camera",
-            ty: PortType::Text,
+            name: PortName::new_static("camera"),
+            ty: types::TEXT,
             required: true,
         };
         let blank = Port {
-            name: "blank",
-            ty: PortType::Text,
+            name: PortName::new_static("blank"),
+            ty: types::TEXT,
             required: false,
         };
         let num = Port {
-            name: "n",
-            ty: PortType::Num,
+            name: PortName::new_static("n"),
+            ty: types::NUM,
             required: true,
         };
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
@@ -1615,13 +1753,13 @@ mod tests {
         let cfg =
             json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
         let dict = Port {
-            name: "headers",
-            ty: PortType::Dictionary,
+            name: PortName::new_static("headers"),
+            ty: types::DICTIONARY,
             required: false,
         };
         let empty = Port {
-            name: "empty",
-            ty: PortType::Dictionary,
+            name: PortName::new_static("empty"),
+            ty: types::DICTIONARY,
             required: false,
         };
         let got = literal_for(&cfg, dict).unwrap();
@@ -1793,10 +1931,7 @@ mod tests {
     #[test]
     fn current_frame_summary_reports_the_size_it_actually_returned() {
         let mut outputs = PortValues::new();
-        outputs.insert(
-            "image".to_string(),
-            PortValue::Image(vec![0u8; 40 * 1024]),
-        );
+        outputs.insert("image".to_string(), PortValue::Image(vec![0u8; 40 * 1024]));
         outputs.insert("age_ms".to_string(), PortValue::Num(0));
         let s = debug_summary(
             NodeKind::GetCurrentFrame,

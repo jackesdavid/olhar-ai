@@ -18,69 +18,100 @@ use uuid::Uuid;
 // Ports
 // ---------------------------------------------------------------------------
 
-/// The value kinds that flow along edges. An edge is valid only if its source
-/// output port and target input port share the same `PortType`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PortType {
-    Text,
-    Num,
-    Bool,
-    Image,
-    /// A notification recipient handle (carried as the recipient's label).
-    Recipient,
+/// The port types this product adds to the engine's builtin set.
+///
+/// [`PortType`](ggraph_core::PortType) is an open newtype over a string, so a product declares
+/// its own next to the builtins and the engine moves values along wires without knowing what
+/// they are. **The strings are the ones already on the wire** — they are what stored graphs
+/// name, what `/workflows/catalog` returns and what the editor colours by, so every one of
+/// these is a compatibility constraint rather than a naming choice.
+pub mod types {
+    pub use ggraph_core::PortType;
+
+    // Builtins, re-exported under this product's names so every port declaration reads the
+    // same way. Three have a wire name that differs from the engine's Rust name, and the WIRE
+    // name is the one that matters: `dictionary` (engine: MAP) and `file` (engine: BYTES).
+    pub const TEXT: PortType = PortType::TEXT;
+    pub const NUM: PortType = PortType::NUM;
+    pub const BOOL: PortType = PortType::BOOL;
+    pub const IMAGE: PortType = PortType::IMAGE;
+    pub const EXEC: PortType = PortType::EXEC;
+    pub const ANY: PortType = PortType::ANY;
+    pub const TABLE: PortType = PortType::TABLE;
+
     /// An arbitrary string→string dictionary (e.g. HTTP headers / form fields).
-    Dictionary,
-    /// A reference to a named, typed-column **Dictionary table** (`dictionaries` table, #113) —
-    /// carried as the dictionary's uuid on the wire, resolved to a `PortValue::Table` at run start.
-    /// The structured cousin of `Dictionary`: columns-with-types + data rows, reusable + mutable.
-    Table,
-    /// Any file (raw bytes + filename), like `Image` but for arbitrary types.
-    File,
-    /// Control flow ("white") — carries no value; sequences node execution.
-    Exec,
-    // ---- Typed arrays (iterated by `ForEach`) + their element types ----
+    pub const DICTIONARY: PortType = PortType::MAP;
+    /// Any file (raw bytes + filename), like [`IMAGE`] but for arbitrary types.
+    pub const FILE: PortType = PortType::BYTES;
+
+    /// A notification recipient handle (carried as the recipient's label).
+    pub const RECIPIENT: PortType = PortType::new_static("recipient");
     /// `String[]`.
-    TextArray,
+    pub const TEXT_ARRAY: PortType = PortType::new_static("text_array");
     /// `Number[]`.
-    NumArray,
+    pub const NUM_ARRAY: PortType = PortType::new_static("num_array");
     /// `PersonDetection[]` (e.g. the Person detection node's `persons` output).
-    PersonArray,
+    pub const PERSON_ARRAY: PortType = PortType::new_static("person_array");
     /// `FaceDetection[]`.
-    FaceArray,
+    pub const FACE_ARRAY: PortType = PortType::new_static("face_array");
     /// A single `PersonDetection` (e.g. a `ForEach` element).
-    Person,
+    pub const PERSON: PortType = PortType::new_static("person");
     /// A single `FaceDetection`.
-    Face,
+    pub const FACE: PortType = PortType::new_static("face");
     /// A face **embedding** — a fixed-length float vector (512-d ArcFace, #117). Produced by
-    /// `FaceEmbedding`, consumed by `RecognizeFace`/`StoreFace`. A real type so the model/dim is the
-    /// producer's concern and embedding wires can't be crossed with a plain `NumArray`.
-    Embedding,
+    /// `FaceEmbedding`, consumed by `RecognizeFace`/`StoreFace`. A real type so the model/dim
+    /// is the producer's concern and embedding wires can't be crossed with a plain `NUM_ARRAY`.
+    pub const EMBEDDING: PortType = PortType::new_static("embedding");
     /// A bounding box — top-left/bottom-right pixel rectangle (canonical xyxy). A real type
-    /// (not a bare `NumArray`) so producers normalise at the source and consumers never guess
-    /// the coordinate convention. Produced by `Break*` nodes + `OnEvent("motion")`; consumed
-    /// by `DrawBbox`, `BlurOutsideBbox`, `RecordPresence`.
-    Bbox,
+    /// (not a bare `NUM_ARRAY`) so producers normalise at the source and consumers never guess
+    /// the coordinate convention.
+    pub const BBOX: PortType = PortType::new_static("bbox");
     /// The 5 facial landmarks (right/left eye, nose, right/left mouth) for ONE face, in source
-    /// pixels. A real type (not a bare `NumArray`) so producers normalise at the source. Produced by
-    /// `OnEvent("face_detected")` (YuNet `kps`); consumed by `FaceEmbedding` to align the ArcFace
-    /// crop instead of re-detecting (SCRFD) inside it (#122).
-    Landmarks,
+    /// pixels. Produced by `OnEvent("face_detected")` (YuNet `kps`); consumed by
+    /// `FaceEmbedding` to align the ArcFace crop instead of re-detecting inside it (#122).
+    pub const LANDMARKS: PortType = PortType::new_static("landmarks");
     /// A camera device reference (stable device id, carried as a string on the wire).
-    /// Distinct from `Text` so the editor enforces camera-to-camera wiring.
-    Camera,
-    /// A reusable named line/zone (card: edge tracking) — 2 points is a crossing line, 3+ is a
-    /// polygon region. Produced by `Region`; consumed by `OnEvent`'s `region` input
-    /// (`object_entered`/`object_exited`/`line_crossed`), which reads it per its own event kind.
-    Region,
-    /// One currently-tracked entity, as reported by `GetTrackedObjects` — the "state of the
-    /// world" query counterpart to the entered/exited/crossed *events*.
-    TrackedObject,
+    /// Distinct from [`TEXT`] so the editor enforces camera-to-camera wiring.
+    pub const CAMERA: PortType = PortType::new_static("camera");
+    /// A reusable named line/zone — 2 points is a crossing line, 3+ is a polygon region.
+    pub const REGION: PortType = PortType::new_static("region");
+    /// One currently-tracked entity, as reported by `GetTrackedObjects`.
+    pub const TRACKED_OBJECT: PortType = PortType::new_static("tracked_object");
     /// `TrackedObject[]` — `GetTrackedObjects`' main output, iterated by `ForEach`.
-    TrackedObjectArray,
-    /// Wildcard — compatible with ANY type at wire time. Used by `ForEach` (`items`/`item`)
-    /// so one loop node handles every array/element type. See [`Graph::compatible`].
-    Any,
+    pub const TRACKED_OBJECT_ARRAY: PortType = PortType::new_static("tracked_object_array");
+}
+
+pub use ggraph_core::{Edge, Port, PortName, PortType};
+
+/// Where the canvas was left. Stays in this product rather than coming from the engine: the
+/// engine has no canvas, and the 40-pixel starting offset below is this editor's house style.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            x: 40.0,
+            y: 40.0,
+            zoom: 1.0,
+        }
+    }
+}
+
+/// A port declaration whose name is owned rather than static, for ports **derived from a node's
+/// config** (the payload ports of `EmitEvent`/`OnEvent`, one per field of the configured event).
+///
+/// Now the same type as [`Port`]: the engine's `Port` carries a `PortName`, which is cheap to
+/// clone and owns its data when it has to. Two types for one concept meant every caller had to
+/// know which half of the API it was in.
+pub type ResolvedPort = Port;
+
+const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
+    Port::new(PortName::new_static(name), ty, required)
 }
 
 /// A camera device as it appears on the wire — the safe, credential-free subset of `Device`.
@@ -160,37 +191,55 @@ impl BBox {
     }
 }
 
-/// A static port declaration on a `NodeKind` (not persisted — derived from the kind).
-#[derive(Debug, Clone, Copy)]
-pub struct Port {
-    pub name: &'static str,
-    pub ty: PortType,
-    /// Inputs only: a required input with no edge and no config literal fails the run.
-    pub required: bool,
+/// A node kind's ports, resolved against a configuration.
+///
+/// The registry needs the ports of a *kind* plus a config; `GraphNode` already knows how to
+/// work them out, including the eight kinds whose ports are config-derived. Rather than keep a
+/// second copy of that logic — which is exactly how the editor's palette and the scheduler came
+/// to disagree about the same node — these borrow the node's own answer through a throwaway.
+///
+/// The config clone is paid at catalog render and at wire validation, never in a run loop.
+pub fn resolved_input_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    probe(kind, config).input_ports()
 }
 
-const fn p(name: &'static str, ty: PortType, required: bool) -> Port {
-    Port { name, ty, required }
+pub fn resolved_output_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    probe(kind, config).output_ports()
 }
 
-/// An owned port declaration — like [`Port`] but with an owned name, for ports that are
-/// **derived from a node's config** rather than static on the kind (today: the payload
-/// ports of `EmitEvent`/`OnEvent`, one per field of the configured event). See
-/// [`GraphNode::input_ports`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedPort {
-    pub name: String,
-    pub ty: PortType,
-    pub required: bool,
+pub fn resolved_exec_out_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPort> {
+    let node = probe(kind, config);
+    // The three switches name their arms from config; everything else has a static table.
+    match kind {
+        NodeKind::StringSwitch | NodeKind::AiSwitch => string_switch_arms(config)
+            .into_iter()
+            .chain(std::iter::once("default".to_string()))
+            .map(|a| ResolvedPort {
+                name: PortName::new(a),
+                ty: types::EXEC,
+                required: false,
+            })
+            .collect(),
+        NodeKind::CameraSwitch => (1..=camera_switch_arms(config).len())
+            .map(|i| format!("arm_{i}"))
+            .chain(std::iter::once("default".to_string()))
+            .map(|a| ResolvedPort {
+                name: PortName::new(a),
+                ty: types::EXEC,
+                required: false,
+            })
+            .collect(),
+        _ => node.kind.exec_out_ports().to_vec(),
+    }
 }
 
-impl From<&Port> for ResolvedPort {
-    fn from(p: &Port) -> Self {
-        ResolvedPort {
-            name: p.name.to_string(),
-            ty: p.ty,
-            required: p.required,
-        }
+fn probe(kind: NodeKind, config: &Value) -> GraphNode {
+    GraphNode {
+        id: 0,
+        kind,
+        x: 0,
+        y: 0,
+        config: config.clone(),
     }
 }
 
@@ -213,7 +262,7 @@ fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
                         .get("type")
                         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())?;
                     Some(ResolvedPort {
-                        name,
+                        name: PortName::new(name),
                         ty,
                         required: false,
                     })
@@ -227,11 +276,11 @@ fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
 /// `PortType` a `DictMakeRow` column input carries. Unknown → `Text`.
 fn cell_type_to_port(ty: &str) -> PortType {
     match ty {
-        "num" => PortType::Num,
-        "bool" => PortType::Bool,
-        "camera" => PortType::Camera,
-        "recipient" => PortType::Recipient,
-        _ => PortType::Text,
+        "num" => types::NUM,
+        "bool" => types::BOOL,
+        "camera" => types::CAMERA,
+        "recipient" => types::RECIPIENT,
+        _ => types::TEXT,
     }
 }
 
@@ -240,8 +289,8 @@ fn cell_type_to_port(ty: &str) -> PortType {
 /// cell type. Mirrors [`payload_ports`]: the runtime column list is baked into `config.columns`.
 fn dict_row_ports(config: &Value) -> Vec<ResolvedPort> {
     let mut ports = vec![ResolvedPort {
-        name: "schema".to_string(),
-        ty: PortType::Table,
+        name: PortName::new("schema".to_string()),
+        ty: types::TABLE,
         required: true,
     }];
     if let Some(cols) = config.get("columns").and_then(|v| v.as_array()) {
@@ -252,7 +301,7 @@ fn dict_row_ports(config: &Value) -> Vec<ResolvedPort> {
             };
             let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or("text");
             ports.push(ResolvedPort {
-                name,
+                name: PortName::new(name),
                 ty: cell_type_to_port(ty),
                 required: false,
             });
@@ -269,9 +318,9 @@ fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort> {
     let ty = config
         .get("type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
-        .unwrap_or(PortType::Text);
+        .unwrap_or(types::TEXT);
     vec![ResolvedPort {
-        name: "value".to_string(),
+        name: PortName::new("value".to_string()),
         ty,
         required,
     }]
@@ -304,9 +353,9 @@ fn multi_variable_ports(config: &Value) -> Vec<ResolvedPort> {
         let ty = entry
             .get("type")
             .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
-            .unwrap_or(PortType::Text);
+            .unwrap_or(types::TEXT);
         ports.push(ResolvedPort {
-            name,
+            name: PortName::new(name),
             ty,
             required: false,
         });
@@ -322,9 +371,9 @@ fn tuya_value_port(config: &Value) -> Vec<ResolvedPort> {
     let ty = config
         .get("value_type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
-        .unwrap_or(PortType::Bool);
+        .unwrap_or(types::BOOL);
     vec![ResolvedPort {
-        name: "value".to_string(),
+        name: PortName::new("value".to_string()),
         ty,
         required: false,
     }]
@@ -337,21 +386,21 @@ fn tuya_read_output_ports(config: &Value) -> Vec<ResolvedPort> {
     let ty = config
         .get("value_type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
-        .unwrap_or(PortType::Text);
+        .unwrap_or(types::TEXT);
     vec![
         ResolvedPort {
-            name: "value".to_string(),
+            name: PortName::new("value".to_string()),
             ty,
             required: false,
         },
         ResolvedPort {
-            name: "on".to_string(),
-            ty: PortType::Bool,
+            name: PortName::new("on".to_string()),
+            ty: types::BOOL,
             required: false,
         },
         ResolvedPort {
-            name: "raw".to_string(),
-            ty: PortType::Text,
+            name: PortName::new("raw".to_string()),
+            ty: types::TEXT,
             required: false,
         },
     ]
@@ -369,13 +418,13 @@ fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
     if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
         vec![
             ResolvedPort {
-                name: "camera".to_string(),
-                ty: PortType::Camera,
+                name: PortName::new("camera".to_string()),
+                ty: types::CAMERA,
                 required: false,
             },
             ResolvedPort {
-                name: "region".to_string(),
-                ty: PortType::Region,
+                name: PortName::new("region".to_string()),
+                ty: types::REGION,
                 required: false,
             },
         ]
@@ -442,7 +491,8 @@ pub enum NodeKind {
     If,
     /// Flow control: iterate a list (text: comma-separated or a JSON array). Fires
     /// `loop_body` once per element (with `item` + `index`), synchronously, then fires
-    /// `completed` once after the last. Body nodes should be memoize=off so they re-run.
+    /// `completed` once after the last. A body node runs on every pass, as being inside a
+    /// loop implies.
     ForEach,
     /// Vision: compare two frames and report whether/how much they differ.
     MotionDetection,
@@ -694,84 +744,79 @@ pub enum NodeKind {
 }
 
 // Port tables (static). `*` in the spec == `required: true`.
-const GET_LAST_ALERT_OUT: [Port; 7] = [
-    p("id", PortType::Num, false),
-    p("level", PortType::Text, false),
-    p("message", PortType::Text, false),
-    p("room", PortType::Text, false),
-    p("source", PortType::Text, false),
-    p("created_at", PortType::Text, false),
-    p("ok", PortType::Bool, false),
+static GET_LAST_ALERT_OUT: [Port; 7] = [
+    p("id", types::NUM, false),
+    p("level", types::TEXT, false),
+    p("message", types::TEXT, false),
+    p("room", types::TEXT, false),
+    p("source", types::TEXT, false),
+    p("created_at", types::TEXT, false),
+    p("ok", types::BOOL, false),
 ];
 
-const CREATE_ALERT_IN: [Port; 2] = [
-    p("message", PortType::Text, true),
-    p("room", PortType::Text, false),
+static CREATE_ALERT_IN: [Port; 2] = [
+    p("message", types::TEXT, true),
+    p("room", types::TEXT, false),
 ];
-const CREATE_ALERT_OUT: [Port; 3] = [
-    p("id", PortType::Num, false),
-    p("result", PortType::Text, false),
-    p("ok", PortType::Bool, false),
-];
-
-const RECORD_PRESENCE_IN: [Port; 8] = [
-    p("room", PortType::Text, false),
-    p("category", PortType::Text, false),
-    p("label", PortType::Text, false),
-    p("camera", PortType::Camera, false),
-    p("bbox", PortType::Bbox, false), // [x1,y1,x2,y2] from BreakPersonDetection
-    p("frame_w", PortType::Num, false), // source image width in pixels
-    p("frame_h", PortType::Num, false), // source image height in pixels
-    p("duration_secs", PortType::Num, false),
-];
-const RECORD_PRESENCE_OUT: [Port; 2] = [
-    p("id", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static CREATE_ALERT_OUT: [Port; 3] = [
+    p("id", types::NUM, false),
+    p("result", types::TEXT, false),
+    p("ok", types::BOOL, false),
 ];
 
-const DELIVER_ALERT_IN: [Port; 1] = [p("id", PortType::Num, true)];
-const DELIVER_ALERT_OUT: [Port; 2] = [
-    p("result", PortType::Text, false),
-    p("ok", PortType::Bool, false),
+static RECORD_PRESENCE_IN: [Port; 8] = [
+    p("room", types::TEXT, false),
+    p("category", types::TEXT, false),
+    p("label", types::TEXT, false),
+    p("camera", types::CAMERA, false),
+    p("bbox", types::BBOX, false), // [x1,y1,x2,y2] from BreakPersonDetection
+    p("frame_w", types::NUM, false), // source image width in pixels
+    p("frame_h", types::NUM, false), // source image height in pixels
+    p("duration_secs", types::NUM, false),
+];
+static RECORD_PRESENCE_OUT: [Port; 2] = [p("id", types::NUM, false), p("ok", types::BOOL, false)];
+
+static DELIVER_ALERT_IN: [Port; 1] = [p("id", types::NUM, true)];
+static DELIVER_ALERT_OUT: [Port; 2] =
+    [p("result", types::TEXT, false), p("ok", types::BOOL, false)];
+
+static CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
+static CAMERA_SNAPSHOT_OUT: [Port; 5] = [
+    p("image", types::IMAGE, false),
+    p("result", types::TEXT, false),
+    p("width", types::NUM, false),
+    p("height", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
-const CAMERA_SNAPSHOT_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const CAMERA_SNAPSHOT_OUT: [Port; 5] = [
-    p("image", PortType::Image, false),
-    p("result", PortType::Text, false),
-    p("width", PortType::Num, false),
-    p("height", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static GET_TRACKED_OBJECTS_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
+static GET_TRACKED_OBJECTS_OUT: [Port; 2] = [
+    p("objects", types::TRACKED_OBJECT_ARRAY, false),
+    p("count", types::NUM, false),
 ];
 
-const GET_TRACKED_OBJECTS_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const GET_TRACKED_OBJECTS_OUT: [Port; 2] = [
-    p("objects", PortType::TrackedObjectArray, false),
-    p("count", PortType::Num, false),
+static GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
+static GET_CURRENT_FRAME_OUT: [Port; 5] = [
+    p("image", types::IMAGE, false),
+    p("age_ms", types::NUM, false), // how old the returned frame is (0 = fresh capture)
+    p("width", types::NUM, false),
+    p("height", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
-const GET_CURRENT_FRAME_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const GET_CURRENT_FRAME_OUT: [Port; 5] = [
-    p("image", PortType::Image, false),
-    p("age_ms", PortType::Num, false), // how old the returned frame is (0 = fresh capture)
-    p("width", PortType::Num, false),
-    p("height", PortType::Num, false),
-    p("ok", PortType::Bool, false),
-];
-
-const DESCRIBE_IMAGE_IN: [Port; 2] = [
-    p("image", PortType::Image, true),
+static DESCRIBE_IMAGE_IN: [Port; 2] = [
+    p("image", types::IMAGE, true),
     // Optional guiding question — when wired/set, the caption answers it about the frame.
-    p("question", PortType::Text, false),
+    p("question", types::TEXT, false),
 ];
-const DESCRIBE_IMAGE_OUT: [Port; 2] = [
-    p("description", PortType::Text, false),
-    p("ok", PortType::Bool, false),
+static DESCRIBE_IMAGE_OUT: [Port; 2] = [
+    p("description", types::TEXT, false),
+    p("ok", types::BOOL, false),
 ];
 
-const GET_RECIPIENT_OUT: [Port; 2] = [
-    p("recipient", PortType::Recipient, false),
-    p("ok", PortType::Bool, false),
+static GET_RECIPIENT_OUT: [Port; 2] = [
+    p("recipient", types::RECIPIENT, false),
+    p("ok", types::BOOL, false),
 ];
 
 // Device Gate: ask a person before continuing. Both inputs are `required` — which still allows
@@ -780,427 +825,408 @@ const GET_RECIPIENT_OUT: [Port; 2] = [
 // should fail the run loudly; it must not arrive as `failure`, which means a human was asked and
 // did not answer. Hiding a broken gate behind the same arm as an unanswered one is how a graph
 // ends up treating "never asked" as "asked and ignored".
-const DEVICE_GATE_IN: [Port; 2] = [
-    p("recipient", PortType::Recipient, true),
-    p("message", PortType::Text, true),
+static DEVICE_GATE_IN: [Port; 2] = [
+    p("recipient", types::RECIPIENT, true),
+    p("message", types::TEXT, true),
 ];
 // What the answer was, for graphs that want to log or notify on it. `factor` carries the map's
 // decision 02: an approval confirmed by passcode rather than biometrics is still an approval, but
 // its strength must be legible rather than assumed. Empty on the `failure` arm — nobody answered,
 // so there is nothing to attribute.
-const DEVICE_GATE_OUT: [Port; 2] = [
-    p("answered_by", PortType::Text, false),
-    p("factor", PortType::Text, false),
+static DEVICE_GATE_OUT: [Port; 2] = [
+    p("answered_by", types::TEXT, false),
+    p("factor", types::TEXT, false),
 ];
 
-const NOTIFY_RECIPIENT_IN: [Port; 3] = [
-    p("message", PortType::Text, true),
-    p("recipient", PortType::Recipient, false),
-    p("image", PortType::Image, false),
+static NOTIFY_RECIPIENT_IN: [Port; 3] = [
+    p("message", types::TEXT, true),
+    p("recipient", types::RECIPIENT, false),
+    p("image", types::IMAGE, false),
 ];
-const NOTIFY_RECIPIENT_OUT: [Port; 2] = [
-    p("result", PortType::Text, false),
-    p("ok", PortType::Bool, false),
-];
+static NOTIFY_RECIPIENT_OUT: [Port; 2] =
+    [p("result", types::TEXT, false), p("ok", types::BOOL, false)];
 
-const FORMAT_IN: [Port; 3] = [
-    p("p1", PortType::Text, false),
-    p("p2", PortType::Text, false),
-    p("p3", PortType::Text, false),
+static FORMAT_IN: [Port; 3] = [
+    p("p1", types::TEXT, false),
+    p("p2", types::TEXT, false),
+    p("p3", types::TEXT, false),
 ];
-const FORMAT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
+static FORMAT_OUT: [Port; 1] = [p("text", types::TEXT, false)];
 
 // HTTP POST: url + arbitrary header/field maps + an optional file (→ multipart).
-const HTTP_POST_IN: [Port; 4] = [
-    p("url", PortType::Text, true),
-    p("headers", PortType::Dictionary, false),
-    p("fields", PortType::Dictionary, false),
-    p("file", PortType::File, false),
+static HTTP_POST_IN: [Port; 4] = [
+    p("url", types::TEXT, true),
+    p("headers", types::DICTIONARY, false),
+    p("fields", types::DICTIONARY, false),
+    p("file", types::FILE, false),
 ];
-const HTTP_POST_OUT: [Port; 3] = [
-    p("status", PortType::Num, false),
-    p("response", PortType::Text, false),
-    p("ok", PortType::Bool, false),
+static HTTP_POST_OUT: [Port; 3] = [
+    p("status", types::NUM, false),
+    p("response", types::TEXT, false),
+    p("ok", types::BOOL, false),
 ];
 
 // Smart home (Tuya): device + data point are config dropdowns (no data inputs), like the
 // camera picker on `GetCameraByName`.
-const TUYA_CONTROL_OUT: [Port; 2] = [
-    p("ok", PortType::Bool, false),
-    p("response", PortType::Text, false),
+static TUYA_CONTROL_OUT: [Port; 2] = [
+    p("ok", types::BOOL, false),
+    p("response", types::TEXT, false),
 ];
-const TUYA_READ_STATUS_OUT: [Port; 3] = [
-    p("value", PortType::Text, false),
-    p("on", PortType::Bool, false),
-    p("raw", PortType::Text, false),
+static TUYA_READ_STATUS_OUT: [Port; 3] = [
+    p("value", types::TEXT, false),
+    p("on", types::BOOL, false),
+    p("raw", types::TEXT, false),
 ];
 
 // ---- Dictionaries (#113) ----
 // A `row` is emitted / consumed as a colname→value string Dictionary (consumable by Format,
 // HTTP Post fields, etc.). The `table` port is a reference to a named dictionary (dropdown-picked
 // id, or wired from a Table variable).
-const DICT_ROW_COUNT_IN: [Port; 1] = [p("table", PortType::Table, true)];
-const DICT_ROW_COUNT_OUT: [Port; 1] = [p("count", PortType::Num, false)];
+static DICT_ROW_COUNT_IN: [Port; 1] = [p("table", types::TABLE, true)];
+static DICT_ROW_COUNT_OUT: [Port; 1] = [p("count", types::NUM, false)];
 
-const DICT_GET_ROW_IN: [Port; 2] = [
-    p("table", PortType::Table, true),
-    p("index", PortType::Num, true),
-];
-const DICT_GET_ROW_OUT: [Port; 2] = [
-    p("row", PortType::Dictionary, false),
-    p("found", PortType::Bool, false),
+static DICT_GET_ROW_IN: [Port; 2] = [p("table", types::TABLE, true), p("index", types::NUM, true)];
+static DICT_GET_ROW_OUT: [Port; 2] = [
+    p("row", types::DICTIONARY, false),
+    p("found", types::BOOL, false),
 ];
 
-const DICT_FIND_ROW_IN: [Port; 3] = [
-    p("table", PortType::Table, true),
-    p("column", PortType::Text, true),
-    p("key", PortType::Text, true),
+static DICT_FIND_ROW_IN: [Port; 3] = [
+    p("table", types::TABLE, true),
+    p("column", types::TEXT, true),
+    p("key", types::TEXT, true),
 ];
-const DICT_FIND_ROW_OUT: [Port; 3] = [
-    p("row", PortType::Dictionary, false),
-    p("index", PortType::Num, false),
-    p("found", PortType::Bool, false),
-];
-
-const DICT_GET_CELL_IN: [Port; 3] = [
-    p("table", PortType::Table, true),
-    p("row", PortType::Num, true),
-    p("column", PortType::Text, true),
-];
-const DICT_GET_CELL_OUT: [Port; 2] = [
-    p("value", PortType::Text, false),
-    p("found", PortType::Bool, false),
+static DICT_FIND_ROW_OUT: [Port; 3] = [
+    p("row", types::DICTIONARY, false),
+    p("index", types::NUM, false),
+    p("found", types::BOOL, false),
 ];
 
-const DICT_ADD_ROW_IN: [Port; 2] = [
-    p("table", PortType::Table, true),
-    p("values", PortType::Dictionary, false),
+static DICT_GET_CELL_IN: [Port; 3] = [
+    p("table", types::TABLE, true),
+    p("row", types::NUM, true),
+    p("column", types::TEXT, true),
 ];
-const DICT_SET_CELL_IN: [Port; 4] = [
-    p("table", PortType::Table, true),
-    p("row", PortType::Num, true),
-    p("column", PortType::Text, true),
-    p("value", PortType::Text, false),
+static DICT_GET_CELL_OUT: [Port; 2] = [
+    p("value", types::TEXT, false),
+    p("found", types::BOOL, false),
 ];
-const DICT_UPDATE_ROW_IN: [Port; 4] = [
-    p("table", PortType::Table, true),
-    p("column", PortType::Text, true),
-    p("key", PortType::Text, true),
-    p("values", PortType::Dictionary, false),
+
+static DICT_ADD_ROW_IN: [Port; 2] = [
+    p("table", types::TABLE, true),
+    p("values", types::DICTIONARY, false),
 ];
-const DICT_DELETE_ROW_IN: [Port; 3] = [
-    p("table", PortType::Table, true),
-    p("column", PortType::Text, true),
-    p("key", PortType::Text, true),
+static DICT_SET_CELL_IN: [Port; 4] = [
+    p("table", types::TABLE, true),
+    p("row", types::NUM, true),
+    p("column", types::TEXT, true),
+    p("value", types::TEXT, false),
 ];
-const DICT_CLEAR_IN: [Port; 1] = [p("table", PortType::Table, true)];
+static DICT_UPDATE_ROW_IN: [Port; 4] = [
+    p("table", types::TABLE, true),
+    p("column", types::TEXT, true),
+    p("key", types::TEXT, true),
+    p("values", types::DICTIONARY, false),
+];
+static DICT_DELETE_ROW_IN: [Port; 3] = [
+    p("table", types::TABLE, true),
+    p("column", types::TEXT, true),
+    p("key", types::TEXT, true),
+];
+static DICT_CLEAR_IN: [Port; 1] = [p("table", types::TABLE, true)];
 
 // Build nodes (compose a table in-graph, no DB). DictSchema seeds an empty typed table from its
 // config columns; DictMakeRow's per-column inputs are dynamic (see `dict_row_ports`) — this static
 // list is the fallback (just `schema`); DictAppendRow appends a `row` Dictionary to a `table`.
-const DICT_SCHEMA_OUT: [Port; 1] = [p("schema", PortType::Table, false)];
-const DICT_MAKE_ROW_IN: [Port; 1] = [p("schema", PortType::Table, true)];
-const DICT_MAKE_ROW_OUT: [Port; 1] = [p("row", PortType::Dictionary, false)];
-const DICT_APPEND_ROW_IN: [Port; 2] = [
-    p("table", PortType::Table, true),
-    p("row", PortType::Dictionary, true),
+static DICT_SCHEMA_OUT: [Port; 1] = [p("schema", types::TABLE, false)];
+static DICT_MAKE_ROW_IN: [Port; 1] = [p("schema", types::TABLE, true)];
+static DICT_MAKE_ROW_OUT: [Port; 1] = [p("row", types::DICTIONARY, false)];
+static DICT_APPEND_ROW_IN: [Port; 2] = [
+    p("table", types::TABLE, true),
+    p("row", types::DICTIONARY, true),
 ];
-const DICT_APPEND_ROW_OUT: [Port; 1] = [p("table", PortType::Table, false)];
+static DICT_APPEND_ROW_OUT: [Port; 1] = [p("table", types::TABLE, false)];
 
 // If: a Bool condition routes the run down one of two exec branches.
-const IF_IN: [Port; 1] = [p("condition", PortType::Bool, true)];
+static IF_IN: [Port; 1] = [p("condition", types::BOOL, true)];
 
 // For each: iterate ANY array (a wired `*Array`, or a text list authored in config).
 // `items`/`item` are `Any` so one loop node handles every element type.
-const FOR_EACH_IN: [Port; 1] = [p("items", PortType::Any, false)];
-const FOR_EACH_OUT: [Port; 2] = [
-    p("item", PortType::Any, false),
-    p("index", PortType::Num, false),
-];
+static FOR_EACH_IN: [Port; 1] = [p("items", types::ANY, false)];
+static FOR_EACH_OUT: [Port; 2] = [p("item", types::ANY, false), p("index", types::NUM, false)];
 
 // Object detection: detect any COCO class — class chosen by config or wired `class` input.
-const OBJECT_DETECTION_IN: [Port; 2] = [
-    p("image", PortType::Image, true),
-    p("class", PortType::Text, false),
+static OBJECT_DETECTION_IN: [Port; 2] = [
+    p("image", types::IMAGE, true),
+    p("class", types::TEXT, false),
 ];
-const OBJECT_DETECTION_OUT: [Port; 6] = [
-    p("count", PortType::Num, false),
-    p("confidence", PortType::Num, false), // percent 0..100 (top detection)
-    p("detections", PortType::PersonArray, false), // one Detection per match — loop this
-    p("width", PortType::Num, false),
-    p("height", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static OBJECT_DETECTION_OUT: [Port; 6] = [
+    p("count", types::NUM, false),
+    p("confidence", types::NUM, false), // percent 0..100 (top detection)
+    p("detections", types::PERSON_ARRAY, false), // one Detection per match — loop this
+    p("width", types::NUM, false),
+    p("height", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
 // Break (destructure) nodes — split a struct element into its fields, like Unreal's Break.
-const BREAK_PERSON_IN: [Port; 1] = [p("person", PortType::Person, true)];
-const BREAK_PERSON_OUT: [Port; 2] = [
-    p("bbox", PortType::Bbox, false),
-    p("confidence", PortType::Num, false),
+static BREAK_PERSON_IN: [Port; 1] = [p("person", types::PERSON, true)];
+static BREAK_PERSON_OUT: [Port; 2] = [
+    p("bbox", types::BBOX, false),
+    p("confidence", types::NUM, false),
 ];
-const BREAK_TRACKED_OBJECT_IN: [Port; 1] = [p("object", PortType::TrackedObject, true)];
-const BREAK_TRACKED_OBJECT_OUT: [Port; 4] = [
-    p("uuid", PortType::Text, false),
-    p("class", PortType::Text, false),
-    p("bbox", PortType::Bbox, false),
-    p("zone", PortType::Text, false),
+static BREAK_TRACKED_OBJECT_IN: [Port; 1] = [p("object", types::TRACKED_OBJECT, true)];
+static BREAK_TRACKED_OBJECT_OUT: [Port; 4] = [
+    p("uuid", types::TEXT, false),
+    p("class", types::TEXT, false),
+    p("bbox", types::BBOX, false),
+    p("zone", types::TEXT, false),
 ];
-const BREAK_DETECTION_IN: [Port; 1] = [p("detection", PortType::Person, true)];
-const BREAK_DETECTION_OUT: [Port; 2] = [
-    p("bbox", PortType::Bbox, false),
-    p("confidence", PortType::Num, false),
+static BREAK_DETECTION_IN: [Port; 1] = [p("detection", types::PERSON, true)];
+static BREAK_DETECTION_OUT: [Port; 2] = [
+    p("bbox", types::BBOX, false),
+    p("confidence", types::NUM, false),
 ];
-const BREAK_FACE_IN: [Port; 1] = [p("face", PortType::Face, true)];
-const BREAK_FACE_OUT: [Port; 3] = [
-    p("bbox", PortType::Bbox, false),
-    p("confidence", PortType::Num, false),
-    p("landmarks", PortType::Num, false), // count of the 5-point landmark set
+static BREAK_FACE_IN: [Port; 1] = [p("face", types::FACE, true)];
+static BREAK_FACE_OUT: [Port; 3] = [
+    p("bbox", types::BBOX, false),
+    p("confidence", types::NUM, false),
+    p("landmarks", types::NUM, false), // count of the 5-point landmark set
 ];
 
 // Motion detection: compare two frames; report whether/how much they differ.
-const MOTION_IN: [Port; 2] = [
-    p("image_a", PortType::Image, true),
-    p("image_b", PortType::Image, true),
+static MOTION_IN: [Port; 2] = [
+    p("image_a", types::IMAGE, true),
+    p("image_b", types::IMAGE, true),
 ];
-const MOTION_OUT: [Port; 3] = [
-    p("moved", PortType::Bool, false),
-    p("score", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static MOTION_OUT: [Port; 3] = [
+    p("moved", types::BOOL, false),
+    p("score", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
-const MOTION_WATCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+static MOTION_WATCH_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
 
 // Person detection: an image in → whether a person is present (via the AI sidecar).
-const PERSON_DETECTION_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const PERSON_DETECTION_OUT: [Port; 6] = [
-    p("count", PortType::Num, false),
-    p("confidence", PortType::Num, false), // percent 0..100 (top person)
-    p("persons", PortType::PersonArray, false), // one PersonDetection per person — loop this
-    p("width", PortType::Num, false),
-    p("height", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static PERSON_DETECTION_IN: [Port; 1] = [p("image", types::IMAGE, true)];
+static PERSON_DETECTION_OUT: [Port; 6] = [
+    p("count", types::NUM, false),
+    p("confidence", types::NUM, false), // percent 0..100 (top person)
+    p("persons", types::PERSON_ARRAY, false), // one PersonDetection per person — loop this
+    p("width", types::NUM, false),
+    p("height", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
 // Recognize person: a face image in → the matched person + confidence.
-const RECOGNIZE_PERSON_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const RECOGNIZE_PERSON_OUT: [Port; 4] = [
-    p("person", PortType::Text, false),    // matched person's name
-    p("person_id", PortType::Text, false), // matched person's id
-    p("confidence", PortType::Num, false), // percent 0..100
-    p("ok", PortType::Bool, false),        // true when a match within threshold
+static RECOGNIZE_PERSON_IN: [Port; 1] = [p("image", types::IMAGE, true)];
+static RECOGNIZE_PERSON_OUT: [Port; 4] = [
+    p("person", types::TEXT, false),    // matched person's name
+    p("person_id", types::TEXT, false), // matched person's id
+    p("confidence", types::NUM, false), // percent 0..100
+    p("ok", types::BOOL, false),        // true when a match within threshold
 ];
 
 // ---- Face recognition pipeline (#117) ----
-const FACE_EMBEDDING_IN: [Port; 2] = [
-    p("image", PortType::Image, true),
-    p("bbox", PortType::Bbox, false), // optional crop-to-face (edge already found it)
+static FACE_EMBEDDING_IN: [Port; 2] = [
+    p("image", types::IMAGE, true),
+    p("bbox", types::BBOX, false), // optional crop-to-face (edge already found it)
 ];
-const FACE_EMBEDDING_OUT: [Port; 3] = [
-    p("embedding", PortType::Embedding, false),
-    p("dim", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static FACE_EMBEDDING_OUT: [Port; 3] = [
+    p("embedding", types::EMBEDDING, false),
+    p("dim", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
-const RECOGNIZE_FACE_IN: [Port; 1] = [p("embedding", PortType::Embedding, true)];
-const RECOGNIZE_FACE_OUT: [Port; 9] = [
-    p("person", PortType::Text, false), // best match's name ("" if none / unknown)
-    p("person_id", PortType::Text, false), // best match's person id (wire → StoreFace.label)
-    p("confidence", PortType::Num, false), // percent 0..100 of the best single embedding
-    p("matches", PortType::Dictionary, false), // top-K identities: person/label → score
-    p("found", PortType::Bool, false),  // a labeled match within max_distance AND unambiguous
+static RECOGNIZE_FACE_IN: [Port; 1] = [p("embedding", types::EMBEDDING, true)];
+static RECOGNIZE_FACE_OUT: [Port; 9] = [
+    p("person", types::TEXT, false), // best match's name ("" if none / unknown)
+    p("person_id", types::TEXT, false), // best match's person id (wire → StoreFace.label)
+    p("confidence", types::NUM, false), // percent 0..100 of the best single embedding
+    p("matches", types::DICTIONARY, false), // top-K identities: person/label → score
+    p("found", types::BOOL, false),  // a labeled match within max_distance AND unambiguous
     // #123 — per-identity scoring, so a graph can branch on HOW the match was won, not just that
     // it was. `confidence` is one lucky crop; `consistency` is the whole identity agreeing.
-    p("consistency", PortType::Num, false), // percent from the mean of the identity's 3 nearest
-    p("samples", PortType::Num, false), // how many of that identity's embeddings were candidates
-    p("margin", PortType::Num, false),  // percentage points clear of the next DIFFERENT identity
-    p("ambiguous", PortType::Bool, false), // runner-up within `margin` — found is forced false
+    p("consistency", types::NUM, false), // percent from the mean of the identity's 3 nearest
+    p("samples", types::NUM, false),     // how many of that identity's embeddings were candidates
+    p("margin", types::NUM, false),      // percentage points clear of the next DIFFERENT identity
+    p("ambiguous", types::BOOL, false),  // runner-up within `margin` — found is forced false
 ];
-const STORE_FACE_IN: [Port; 12] = [
-    p("image", PortType::Image, false),
-    p("embedding", PortType::Embedding, true),
-    p("bbox", PortType::Bbox, false),
-    p("label", PortType::Text, false), // a person id; empty = unknown
-    p("camera", PortType::Camera, false),
-    p("confidence", PortType::Num, false), // detection score 0..100 (from face_detected)
-    p("face_width", PortType::Num, false), // face box width in source px (far-face signal)
+static STORE_FACE_IN: [Port; 12] = [
+    p("image", types::IMAGE, false),
+    p("embedding", types::EMBEDDING, true),
+    p("bbox", types::BBOX, false),
+    p("label", types::TEXT, false), // a person id; empty = unknown
+    p("camera", types::CAMERA, false),
+    p("confidence", types::NUM, false), // detection score 0..100 (from face_detected)
+    p("face_width", types::NUM, false), // face box width in source px (far-face signal)
     // Quality signals (#126), carried through from `face_detected` so the stored capture records
     // what it was measured at. STORED, never judged — the gate that used them ran upstream.
     // The edge's 5 YuNet keypoints, if the graph wires them from `face_detected`. Used only as a
     // FALLBACK for the stored overlay when the sidecar cannot produce the dense 106 — the pose
     // columns are already computed from these on the edge, so nothing here recomputes them.
-    p("kps", PortType::Landmarks, false),
-    p("blur", PortType::Num, false),  // sharpness; higher = sharper
-    p("yaw", PortType::Num, false),   // degrees
-    p("pitch", PortType::Num, false), // degrees
-    p("roll", PortType::Num, false),  // degrees
+    p("kps", types::LANDMARKS, false),
+    p("blur", types::NUM, false),  // sharpness; higher = sharper
+    p("yaw", types::NUM, false),   // degrees
+    p("pitch", types::NUM, false), // degrees
+    p("roll", types::NUM, false),  // degrees
 ];
-const STORE_FACE_OUT: [Port; 2] = [
-    p("stored", PortType::Bool, false), // false if skipped by dedup
-    p("face_id", PortType::Text, false),
+static STORE_FACE_OUT: [Port; 2] = [
+    p("stored", types::BOOL, false), // false if skipped by dedup
+    p("face_id", types::TEXT, false),
 ];
 
 // Print: a message to echo to the Console (+ optional on-screen flash).
-const PRINT_IN: [Port; 2] = [
-    p("message", PortType::Text, false),
-    p("on_screen", PortType::Bool, false),
+static PRINT_IN: [Port; 2] = [
+    p("message", types::TEXT, false),
+    p("on_screen", types::BOOL, false),
 ];
 
 // Show image: a debug sink — an image in, flashed on the canvas. No data out.
-const SHOW_IMAGE_IN: [Port; 1] = [p("image", PortType::Image, true)];
+static SHOW_IMAGE_IN: [Port; 1] = [p("image", types::IMAGE, true)];
 // Display sinks (Text/Gauge): one optional `value` input; unwired falls back to the config literal.
-const TEXT_DISPLAY_IN: [Port; 1] = [p("value", PortType::Text, false)];
-const GAUGE_DISPLAY_IN: [Port; 1] = [p("value", PortType::Num, false)];
+static TEXT_DISPLAY_IN: [Port; 1] = [p("value", types::TEXT, false)];
+static GAUGE_DISPLAY_IN: [Port; 1] = [p("value", types::NUM, false)];
 
 // Flip Flop: exec a/b outputs (alternating), plus is_a bool data output.
-const EXEC_OUT_FLIP_FLOP: [Port; 2] =
-    [p("a", PortType::Exec, false), p("b", PortType::Exec, false)];
-const FLIP_FLOP_OUT: [Port; 1] = [p("is_a", PortType::Bool, false)];
+static EXEC_OUT_FLIP_FLOP: [Port; 2] = [p("a", types::EXEC, false), p("b", types::EXEC, false)];
+static FLIP_FLOP_OUT: [Port; 1] = [p("is_a", types::BOOL, false)];
 
 // Compare: two numeric inputs (wired or literal) → a bool result.
-const COMPARE_IN: [Port; 2] = [p("a", PortType::Num, false), p("b", PortType::Num, false)];
-const COMPARE_OUT: [Port; 1] = [p("result", PortType::Bool, false)];
+static COMPARE_IN: [Port; 2] = [p("a", types::NUM, false), p("b", types::NUM, false)];
+static COMPARE_OUT: [Port; 1] = [p("result", types::BOOL, false)];
 
 // Type cast nodes.
-const NUM_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Num, true)];
-const BOOL_TO_TEXT_IN: [Port; 1] = [p("value", PortType::Bool, true)];
-const CAST_TEXT_OUT: [Port; 1] = [p("text", PortType::Text, false)];
+static NUM_TO_TEXT_IN: [Port; 1] = [p("value", types::NUM, true)];
+static BOOL_TO_TEXT_IN: [Port; 1] = [p("value", types::BOOL, true)];
+static CAST_TEXT_OUT: [Port; 1] = [p("text", types::TEXT, false)];
 
-const COOLDOWN_OUT: [Port; 2] = [
-    p("elapsed_secs", PortType::Num, false),
-    p("ok", PortType::Bool, false),
+static COOLDOWN_OUT: [Port; 2] = [
+    p("elapsed_secs", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
-const DRAW_BBOX_IN: [Port; 2] = [
-    p("image", PortType::Image, true),
-    p("bbox", PortType::Bbox, true),
-];
+static DRAW_BBOX_IN: [Port; 2] = [p("image", types::IMAGE, true), p("bbox", types::BBOX, true)];
 // `bbox` is the box actually drawn — i.e. the input box after the `expand` config is applied,
 // so downstream nodes (blur, crop, presence) can reuse the expanded region.
-const DRAW_BBOX_OUT: [Port; 3] = [
-    p("image", PortType::Image, false),
-    p("bbox", PortType::Bbox, false),
-    p("ok", PortType::Bool, false),
+static DRAW_BBOX_OUT: [Port; 3] = [
+    p("image", types::IMAGE, false),
+    p("bbox", types::BBOX, false),
+    p("ok", types::BOOL, false),
 ];
 
 // DrawText: an image + a bbox to anchor against + the text (wired or config literal).
-const DRAW_TEXT_IN: [Port; 3] = [
-    p("image", PortType::Image, true),
-    p("bbox", PortType::Bbox, true),
-    p("text", PortType::Text, false),
+static DRAW_TEXT_IN: [Port; 3] = [
+    p("image", types::IMAGE, true),
+    p("bbox", types::BBOX, true),
+    p("text", types::TEXT, false),
 ];
-const DRAW_TEXT_OUT: [Port; 2] = [
-    p("image", PortType::Image, false),
-    p("ok", PortType::Bool, false),
+static DRAW_TEXT_OUT: [Port; 2] = [p("image", types::IMAGE, false), p("ok", types::BOOL, false)];
+
+static BLUR_OUTSIDE_BBOX_IN: [Port; 2] =
+    [p("image", types::IMAGE, true), p("bbox", types::BBOX, true)];
+static BLUR_OUTSIDE_BBOX_OUT: [Port; 2] =
+    [p("image", types::IMAGE, false), p("ok", types::BOOL, false)];
+
+static GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", types::IMAGE, true)];
+static GET_IMAGE_SIZE_OUT: [Port; 3] = [
+    p("width", types::NUM, false),
+    p("height", types::NUM, false),
+    p("ok", types::BOOL, false),
 ];
 
-const BLUR_OUTSIDE_BBOX_IN: [Port; 2] = [
-    p("image", PortType::Image, true),
-    p("bbox", PortType::Bbox, true),
-];
-const BLUR_OUTSIDE_BBOX_OUT: [Port; 2] = [
-    p("image", PortType::Image, false),
-    p("ok", PortType::Bool, false),
-];
-
-const GET_IMAGE_SIZE_IN: [Port; 1] = [p("image", PortType::Image, true)];
-const GET_IMAGE_SIZE_OUT: [Port; 3] = [
-    p("width", PortType::Num, false),
-    p("height", PortType::Num, false),
-    p("ok", PortType::Bool, false),
-];
-
-const BOOL_OP_IN: [Port; 2] = [p("a", PortType::Bool, false), p("b", PortType::Bool, false)];
-const NOT_IN: [Port; 1] = [p("a", PortType::Bool, false)];
-const TEXT_COMPARE_IN: [Port; 2] = [p("a", PortType::Text, false), p("b", PortType::Text, false)];
+static BOOL_OP_IN: [Port; 2] = [p("a", types::BOOL, false), p("b", types::BOOL, false)];
+static NOT_IN: [Port; 1] = [p("a", types::BOOL, false)];
+static TEXT_COMPARE_IN: [Port; 2] = [p("a", types::TEXT, false), p("b", types::TEXT, false)];
 
 // String switch: one required text input (the value to match against the arms).
-const STRING_SWITCH_IN: [Port; 1] = [p("value", PortType::Text, true)];
+static STRING_SWITCH_IN: [Port; 1] = [p("value", types::TEXT, true)];
 
 // Camera switch: one required camera input (the entity to match against the arms).
-const CAMERA_SWITCH_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
+static CAMERA_SWITCH_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
 
 // AI switch: one required text input (the message to route by meaning across the arms).
-const AI_SWITCH_IN: [Port; 1] = [p("text", PortType::Text, true)];
+static AI_SWITCH_IN: [Port; 1] = [p("text", types::TEXT, true)];
 
 // AI extract: one required text input (the message to pull a value from).
-const AI_EXTRACT_IN: [Port; 1] = [p("text", PortType::Text, true)];
+static AI_EXTRACT_IN: [Port; 1] = [p("text", types::TEXT, true)];
 // Static template outputs — the real `value` type is dynamic per config.type (GraphNode::output_ports).
-const AI_EXTRACT_OUT: [Port; 2] = [
-    p("value", PortType::Text, false),
-    p("found", PortType::Bool, false),
+static AI_EXTRACT_OUT: [Port; 2] = [
+    p("value", types::TEXT, false),
+    p("found", types::BOOL, false),
 ];
 
 // AI If: optional image + question text. Both are optional at the port level so a
 // text-only question (no image wired) works. The node errors at runtime if no question.
-const ASK_AI_IN: [Port; 2] = [
-    p("image", PortType::Image, false),
-    p("question", PortType::Text, false),
+static ASK_AI_IN: [Port; 2] = [
+    p("image", types::IMAGE, false),
+    p("question", types::TEXT, false),
 ];
 
 // Reroute: wildcard passthrough — one Any input, one Any output.
-const REROUTE_IN: [Port; 1] = [p("value", PortType::Any, false)];
-const REROUTE_OUT: [Port; 1] = [p("value", PortType::Any, false)];
+static REROUTE_IN: [Port; 1] = [p("value", types::ANY, false)];
+static REROUTE_OUT: [Port; 1] = [p("value", types::ANY, false)];
 
 // StartRecording: camera entity + optional pre-roll hint.
-const START_RECORDING_IN: [Port; 2] = [
-    p("camera", PortType::Camera, true),
-    p("pre_roll_secs", PortType::Num, false),
+static START_RECORDING_IN: [Port; 2] = [
+    p("camera", types::CAMERA, true),
+    p("pre_roll_secs", types::NUM, false),
 ];
-const START_RECORDING_OUT: [Port; 1] = [p("clip_id", PortType::Text, false)];
+static START_RECORDING_OUT: [Port; 1] = [p("clip_id", types::TEXT, false)];
 
 // StopRecording: camera entity + optional clip_id from StartRecording.
-const STOP_RECORDING_IN: [Port; 2] = [
-    p("camera", PortType::Camera, true),
-    p("clip_id", PortType::Text, false),
+static STOP_RECORDING_IN: [Port; 2] = [
+    p("camera", types::CAMERA, true),
+    p("clip_id", types::TEXT, false),
 ];
 
 // Reply to sender (Telegram): text reply to the triggering chat + optional image.
-const REPLY_TO_SENDER_IN: [Port; 3] = [
-    p("message", PortType::Text, true),
-    p("chat_id", PortType::Num, true),
-    p("image", PortType::Image, false),
+static REPLY_TO_SENDER_IN: [Port; 3] = [
+    p("message", types::TEXT, true),
+    p("chat_id", types::NUM, true),
+    p("image", types::IMAGE, false),
 ];
-const REPLY_TO_SENDER_OUT: [Port; 2] = [
-    p("queued", PortType::Bool, false),
-    p("result", PortType::Text, false),
+static REPLY_TO_SENDER_OUT: [Port; 2] = [
+    p("queued", types::BOOL, false),
+    p("result", types::TEXT, false),
 ];
 
 // AI Answer: free-text prompt (required) + optional image → a text response.
-const AI_ANSWER_IN: [Port; 2] = [
-    p("prompt", PortType::Text, true),
-    p("image", PortType::Image, false),
+static AI_ANSWER_IN: [Port; 2] = [
+    p("prompt", types::TEXT, true),
+    p("image", types::IMAGE, false),
 ];
-const AI_ANSWER_OUT: [Port; 2] = [
-    p("response", PortType::Text, false),
-    p("ok", PortType::Bool, false),
+static AI_ANSWER_OUT: [Port; 2] = [
+    p("response", types::TEXT, false),
+    p("ok", types::BOOL, false),
 ];
 
 // Reply with recording (Telegram): a clip_id from StartRecording + chat_id + optional caption.
-const REPLY_RECORDING_IN: [Port; 3] = [
-    p("clip_id", PortType::Text, true),
-    p("chat_id", PortType::Num, true),
-    p("caption", PortType::Text, false),
+static REPLY_RECORDING_IN: [Port; 3] = [
+    p("clip_id", types::TEXT, true),
+    p("chat_id", types::NUM, true),
+    p("caption", types::TEXT, false),
 ];
-const REPLY_RECORDING_OUT: [Port; 2] = [
-    p("queued", PortType::Bool, false),
-    p("result", PortType::Text, false),
+static REPLY_RECORDING_OUT: [Port; 2] = [
+    p("queued", types::BOOL, false),
+    p("result", types::TEXT, false),
 ];
 
-const GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", PortType::Camera, false)];
+static GET_CAMERA_BY_NAME_OUT: [Port; 1] = [p("camera", types::CAMERA, false)];
 /// `Region`'s `camera` input is optional/wireable (from `GetCameraByName`) with a config-picker
 /// fallback — same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
-const REGION_IN: [Port; 1] = [p("camera", PortType::Camera, false)];
-const REGION_OUT: [Port; 1] = [p("region", PortType::Region, false)];
+static REGION_IN: [Port; 1] = [p("camera", types::CAMERA, false)];
+static REGION_OUT: [Port; 1] = [p("region", types::REGION, false)];
 
-const BREAK_CAMERA_IN: [Port; 1] = [p("camera", PortType::Camera, true)];
-const BREAK_CAMERA_OUT: [Port; 3] = [
-    p("id", PortType::Text, false),
-    p("ip", PortType::Text, false),
-    p("name", PortType::Text, false),
+static BREAK_CAMERA_IN: [Port; 1] = [p("camera", types::CAMERA, true)];
+static BREAK_CAMERA_OUT: [Port; 3] = [
+    p("id", types::TEXT, false),
+    p("ip", types::TEXT, false),
+    p("name", types::TEXT, false),
 ];
 
-const NO_PORTS: [Port; 0] = [];
+static NO_PORTS: [Port; 0] = [];
 
 // TimeGate exec outputs: a single `out` port (fires when the countdown expires).
-const EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", PortType::Exec, false)];
+static EXEC_OUT_TIME_GATE: [Port; 1] = [p("out", types::EXEC, false)];
 
 /// Marks an entry payload as a `DelayTrigger` window expiry — the trailing-edge delivery from
 /// the window consumer. The node tests for this rather than trusting `forced` alone, because a
@@ -1217,30 +1243,30 @@ pub const DEVICE_GATE_ANSWERED_BY: &str = "__device_gate_answered_by";
 pub const DEVICE_GATE_FACTOR: &str = "__device_gate_factor";
 
 // Delay Trigger exec outputs: `start` on the leading edge, `stop` on the trailing one.
-const EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [
-    p("start", PortType::Exec, false),
-    p("stop", PortType::Exec, false),
+static EXEC_OUT_DELAY_TRIGGER: [Port; 2] = [
+    p("start", types::EXEC, false),
+    p("stop", types::EXEC, false),
 ];
 
 // Universal control-flow ports — every node has an `exec_in` and, by default, an
 // `exec_out`. They carry no value; they sequence/gate execution. A node kind may
 // override its exec OUTPUTS (e.g. `If` splits into `true`/`false`).
-pub const EXEC_IN: Port = p("exec_in", PortType::Exec, false);
-pub const EXEC_OUT: Port = p("exec_out", PortType::Exec, false);
-pub const EXEC_TRUE: Port = p("true", PortType::Exec, false);
-pub const EXEC_FALSE: Port = p("false", PortType::Exec, false);
+pub const EXEC_IN: Port = p("exec_in", types::EXEC, false);
+pub const EXEC_OUT: Port = p("exec_out", types::EXEC, false);
+pub const EXEC_TRUE: Port = p("true", types::EXEC, false);
+pub const EXEC_FALSE: Port = p("false", types::EXEC, false);
 /// `For each` exec outs: `loop_body` fires once per element; `completed` fires once after.
-pub const EXEC_LOOP_BODY: Port = p("loop_body", PortType::Exec, false);
-pub const EXEC_COMPLETED: Port = p("completed", PortType::Exec, false);
-const EXEC_OUT_DEVICE_GATE: [Port; 3] = [
-    p("positive", PortType::Exec, false),
-    p("negative", PortType::Exec, false),
-    p("failure", PortType::Exec, false),
+pub const EXEC_LOOP_BODY: Port = p("loop_body", types::EXEC, false);
+pub const EXEC_COMPLETED: Port = p("completed", types::EXEC, false);
+static EXEC_OUT_DEVICE_GATE: [Port; 3] = [
+    p("positive", types::EXEC, false),
+    p("negative", types::EXEC, false),
+    p("failure", types::EXEC, false),
 ];
 
-const EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
-const EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
-const EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
+static EXEC_OUT_DEFAULT: [Port; 1] = [EXEC_OUT];
+static EXEC_OUT_IF: [Port; 2] = [EXEC_TRUE, EXEC_FALSE];
+static EXEC_OUT_FOR_EACH: [Port; 2] = [EXEC_LOOP_BODY, EXEC_COMPLETED];
 
 impl NodeKind {
     /// All user-visible node kinds. Reroute is intentionally excluded: it is a
@@ -1908,21 +1934,16 @@ impl NodeKind {
 
     pub fn input_port(self, name: &str) -> Option<Port> {
         if name == EXEC_IN.name {
-            return Some(EXEC_IN);
+            return Some(EXEC_IN.clone());
         }
-        self.input_ports().iter().copied().find(|p| p.name == name)
+        self.input_ports().iter().find(|p| p.name == name).cloned()
     }
 
     pub fn output_port(self, name: &str) -> Option<Port> {
-        if let Some(e) = self
-            .exec_out_ports()
-            .iter()
-            .copied()
-            .find(|p| p.name == name)
-        {
-            return Some(e);
+        if let Some(e) = self.exec_out_ports().iter().find(|p| p.name == name) {
+            return Some(e.clone());
         }
-        self.output_ports().iter().copied().find(|p| p.name == name)
+        self.output_ports().iter().find(|p| p.name == name).cloned()
     }
 
     /// Static config + literal fallbacks for unconnected input ports.
@@ -2089,13 +2110,6 @@ pub struct GraphNode {
     /// Static settings + literal fallbacks for unconnected input ports.
     #[serde(default)]
     pub config: Value,
-    /// Whether this node's output is cached for the duration of a run (default) or
-    /// recomputed every time the node is reached. `true` = today's behavior (runs once,
-    /// reused on fan-out). Set `false` for loop bodies and time-varying sources
-    /// (e.g. `GetCurrentFrame`) so re-activation actually re-runs them. Old graphs
-    /// (no field) deserialize to `true`.
-    #[serde(default = "default_true")]
-    pub memoize: bool,
 }
 
 /// Default grace for a LATE cron fire, in seconds (#cron-node).
@@ -2168,7 +2182,7 @@ impl GraphNode {
             NodeKind::OnEvent => on_event_input_ports(&self.config),
             // DictMakeRow: `schema` (Table) + one input per configured column (see `dict_row_ports`).
             NodeKind::DictMakeRow => dict_row_ports(&self.config),
-            k => k.input_ports().iter().map(ResolvedPort::from).collect(),
+            k => k.input_ports().iter().cloned().collect(),
         }
     }
 
@@ -2187,20 +2201,20 @@ impl GraphNode {
             NodeKind::AiExtract => {
                 let mut ports = variable_port(&self.config, false);
                 ports.push(ResolvedPort {
-                    name: "found".to_string(),
-                    ty: PortType::Bool,
+                    name: PortName::new("found".to_string()),
+                    ty: types::BOOL,
                     required: false,
                 });
                 ports
             }
-            k => k.output_ports().iter().map(ResolvedPort::from).collect(),
+            k => k.output_ports().iter().cloned().collect(),
         }
     }
 
     /// Look up one input port by name (config-aware), incl. the universal `exec_in`.
     pub fn input_port(&self, name: &str) -> Option<ResolvedPort> {
         if name == EXEC_IN.name {
-            return Some(ResolvedPort::from(&EXEC_IN));
+            return Some(EXEC_IN.clone());
         }
         self.input_ports().into_iter().find(|p| p.name == name)
     }
@@ -2214,8 +2228,8 @@ impl GraphNode {
             let arms = string_switch_arms(&self.config);
             if arms.iter().any(|a| a == name) || name == "default" {
                 return Some(ResolvedPort {
-                    name: name.to_string(),
-                    ty: PortType::Exec,
+                    name: PortName::new(name.to_string()),
+                    ty: types::EXEC,
                     required: false,
                 });
             }
@@ -2228,15 +2242,15 @@ impl GraphNode {
                 (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
             if valid {
                 return Some(ResolvedPort {
-                    name: name.to_string(),
-                    ty: PortType::Exec,
+                    name: PortName::new(name.to_string()),
+                    ty: types::EXEC,
                     required: false,
                 });
             }
             return None;
         }
         if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
-            return Some(ResolvedPort::from(e));
+            return Some(e.clone());
         }
         self.output_ports().into_iter().find(|p| p.name == name)
     }
@@ -2270,15 +2284,6 @@ pub fn camera_switch_arms(config: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// A typed, directed wire: source node's `from_port` → target node's `to_port`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Edge {
-    pub from: u32,
-    pub from_port: String,
-    pub to: u32,
-    pub to_port: String,
 }
 
 /// How a graph fires **as a whole** — which, since the cron selector landed on `When Event`, is
@@ -2472,25 +2477,6 @@ impl Default for ConcurrencyPolicy {
 // Graph
 // ---------------------------------------------------------------------------
 
-/// The editor's saved camera position — pan offset (px) + zoom — persisted per
-/// graph so re-opening it restores where the operator left off.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Viewport {
-    pub x: f64,
-    pub y: f64,
-    pub zoom: f64,
-}
-
-impl Default for Viewport {
-    fn default() -> Self {
-        Viewport {
-            x: 40.0,
-            y: 40.0,
-            zoom: 1.0,
-        }
-    }
-}
-
 /// One named automation: a trigger + a DAG of typed nodes/edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Graph {
@@ -2679,7 +2665,7 @@ impl Graph {
         Some((name, points))
     }
 
-    /// Add a node at (x, y); returns its new id. All new nodes default to memoize=false
+    /// Add a node at (x, y); returns its new id.
     /// (recompute every time) — the user opts in to caching explicitly via the inspector.
     pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
         let id = self.next_id;
@@ -2690,7 +2676,6 @@ impl Graph {
             x,
             y,
             config: kind.default_config(),
-            memoize: false,
         });
         id
     }
@@ -2742,8 +2727,11 @@ impl Graph {
     /// Whether an output of type `from` may feed an input of type `to`: an exact match, or
     /// either side is the `Any` wildcard (so `ForEach` accepts any array and yields any
     /// element). Keeps every other pair strictly typed.
-    fn compatible(from: PortType, to: PortType) -> bool {
-        from == to || from == PortType::Any || to == PortType::Any
+    /// The engine's rule, not a second copy of it: equality plus the wildcard. Two
+    /// implementations of "may this wire exist" is how an editor starts allowing a link the
+    /// scheduler then refuses.
+    fn compatible(from: &PortType, to: &PortType) -> bool {
+        ggraph_core::compatible(from, to)
     }
 
     /// Validate and add a typed edge. Rejects: self-loop · unknown port ·
@@ -2770,7 +2758,7 @@ impl Graph {
             .input_port(to_port)
             .ok_or_else(|| format!("{} has no input port '{to_port}'", tnode.kind.label()))?
             .ty;
-        if !Self::compatible(ft, tt) {
+        if !Self::compatible(&ft, &tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));
         }
         // exec_in accepts fan-in (multiple execution paths converging on the same node —
@@ -2795,9 +2783,9 @@ impl Graph {
         }
         self.edges.push(Edge {
             from,
-            from_port: from_port.to_string(),
+            from_port: PortName::new(from_port),
             to,
-            to_port: to_port.to_string(),
+            to_port: PortName::new(to_port),
         });
         Ok(())
     }
@@ -3124,10 +3112,10 @@ mod tests {
         let names: Vec<_> = NodeKind::If
             .exec_out_ports()
             .iter()
-            .map(|p| p.name)
+            .map(|p| p.name.clone())
             .collect();
         assert_eq!(names, vec!["true", "false"]);
-        assert_eq!(NodeKind::If.output_port("true").unwrap().ty, PortType::Exec);
+        assert_eq!(NodeKind::If.output_port("true").unwrap().ty, types::EXEC);
         // `condition` is a required Bool data input.
         assert!(NodeKind::If.input_port("condition").unwrap().required);
     }
@@ -3141,31 +3129,6 @@ mod tests {
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
         assert_eq!(g, g2);
-    }
-
-    #[test]
-    fn memoize_defaults_false_for_new_nodes_and_round_trips() {
-        // New nodes default to memoize=false.
-        let mut g = Graph::new("g");
-        let n = g.add_node(NodeKind::Format, 0, 0);
-        assert!(
-            !g.node(n).unwrap().memoize,
-            "new node defaults to memoize=false"
-        );
-
-        // An old persisted node JSON without the `memoize` key deserializes to true (back-compat).
-        let old = r#"{"id":7,"kind":"format","x":0,"y":0,"config":{}}"#;
-        let node: GraphNode = serde_json::from_str(old).unwrap();
-        assert!(
-            node.memoize,
-            "missing memoize → true (back-compat for pre-memoize nodes)"
-        );
-
-        // memoize=true round-trips.
-        g.node_mut(n).unwrap().memoize = true;
-        let s = serde_json::to_string(&g).unwrap();
-        let g2: Graph = serde_json::from_str(&s).unwrap();
-        assert!(g2.node(n).unwrap().memoize);
     }
 
     #[test]
@@ -3217,7 +3180,7 @@ mod tests {
     fn string_switch_value_port_is_required_text() {
         let k = NodeKind::StringSwitch;
         let p = k.input_port("value").expect("value port exists");
-        assert_eq!(p.ty, PortType::Text);
+        assert_eq!(p.ty, types::TEXT);
         assert!(p.required);
         // exec_out_ports is empty (dynamic); output_ports is empty.
         assert!(k.exec_out_ports().is_empty());
@@ -3250,8 +3213,8 @@ mod tests {
         let ins = g.node(set).unwrap().input_ports();
         assert_eq!(ins.len(), 2, "Set grows one input per variable");
         assert_eq!(ins[0].name, "bbox");
-        assert_eq!(ins[0].ty, PortType::Bbox);
-        assert_eq!(ins[1].ty, PortType::Num);
+        assert_eq!(ins[0].ty, types::BBOX);
+        assert_eq!(ins[1].ty, types::NUM);
         // Never required: an unwired input means "leave this variable alone".
         assert!(ins.iter().all(|p| !p.required));
         // Set writes; it exposes no data outputs, only its exec passthrough.
@@ -3279,7 +3242,7 @@ mod tests {
         ] }));
         let names: Vec<&str> = ports.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b"], "blanks and repeats are dropped");
-        assert_eq!(ports[0].ty, PortType::Num, "the FIRST entry wins");
+        assert_eq!(ports[0].ty, types::NUM, "the FIRST entry wins");
         assert_eq!(ports[1].name, "b", "names are trimmed");
     }
 

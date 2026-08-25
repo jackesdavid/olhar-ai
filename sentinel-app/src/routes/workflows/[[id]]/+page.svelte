@@ -126,7 +126,7 @@
     outputs: CatPort[];
     default_config: Record<string, unknown>;
   };
-  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown>; memoize?: boolean };
+  type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown> };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
   type ScheduleFreq = "hourly" | "daily" | "weekly" | "monthly" | "yearly";
   type ScheduleT = {
@@ -309,7 +309,6 @@
   type ClipNode = {
     kind: string;
     config: Record<string, unknown>;
-    memoize?: boolean;
     dx: number;
     dy: number;
   };
@@ -575,7 +574,6 @@
         .map((n) => ({
           kind: n.kind as string,
           config: (n.config ?? {}) as Record<string, unknown>,
-          memoize: n.memoize as boolean | undefined,
           dx: Number(n.dx) || 0,
           dy: Number(n.dy) || 0,
         }));
@@ -827,6 +825,28 @@
   const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let runEnded = false;
 
+  // Which exec ARMS fired, keyed `node:port` — driven by workflow-arm events. An edge is lit by
+  // its own source arm, not by whether its target is live: with two branches converging on one
+  // node, the target rule lights both incoming edges and only one of them carried control (#206).
+  const liveArms = $state<Record<string, true>>({});
+  const armTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function markArmLive(nodeId: number, port: string) {
+    const key = `${nodeId}:${port}`;
+    const prev = armTimers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    liveArms[key] = true;
+    armTimers.set(key, setTimeout(() => {
+      armTimers.delete(key);
+      delete liveArms[key];
+    }, MIN_HIGHLIGHT_MS));
+  }
+
+  /** Did control travel along this edge? */
+  function edgeLive(from: number, fromPort: string): boolean {
+    return `${from}:${fromPort}` in liveArms;
+  }
+
   function markLive(nodeId: number) {
     runEnded = false;
     const prev = liveTimers.get(nodeId);
@@ -847,11 +867,17 @@
       const id = Number(k);
       if (!liveTimers.has(id)) delete liveNodes[id];
     }
+    for (const k of Object.keys(liveArms)) {
+      if (!armTimers.has(k)) delete liveArms[k];
+    }
   }
   function clearLive() {
     for (const t of liveTimers.values()) clearTimeout(t);
     liveTimers.clear();
     for (const k in liveNodes) delete liveNodes[Number(k)];
+    for (const t of armTimers.values()) clearTimeout(t);
+    armTimers.clear();
+    for (const k in liveArms) delete liveArms[k];
     runEnded = false;
   }
 
@@ -1311,7 +1337,9 @@
     // (adaptive widget) is the unwired fallback. Mirrors Set Variable.
     if (node.kind === "tuya_control") {
       const ty = (typeof node.config?.value_type === "string" ? node.config.value_type : "bool") as CatPort["type"];
-      return { ...k, inputs: [...k.inputs, { name: "value", type: ty, required: false }] };
+      // Replace rather than append: the catalog already declares `value` for the default
+      // value_type, and this override is the same port typed by THIS node's config.
+      return { ...k, inputs: [...k.inputs.filter((p) => p.name !== "value"), { name: "value", type: ty, required: false }] };
     }
     // Read Tuya Status: the `value` output is typed by the selected data point (like the control
     // node's input), so a read wires straight into the right type; `on`/`raw` stay static.
@@ -1343,7 +1371,8 @@
       const colPorts: CatPort[] = cols
         .filter((c) => c && String(c.name).trim())
         .map((c) => ({ name: String(c.name), type: (c.type ?? "text") as CatPort["type"], required: false }));
-      return { ...k, inputs: [...k.inputs, ...colPorts] };
+      const colNames = new Set(colPorts.map((p) => p.name));
+      return { ...k, inputs: [...k.inputs.filter((p) => !colNames.has(p.name)), ...colPorts] };
     }
     // AI Extract: `value` output typed per config.type (so it wires straight into Camera/Notify) + found.
     if (node.kind === "ai_extract") {
@@ -1954,6 +1983,11 @@
       const p = payload as { graph: string; node: number };
       if (p.graph === selectedGraphId) markLive(p.node);
     });
+    // Which exec arm fired — the only thing that says which EDGE control took (#206).
+    const unArm = onEvent("workflow-arm", (payload) => {
+      const p = payload as { graph: string; node: number; port: string };
+      if (p.graph === selectedGraphId) markArmLive(p.node, p.port);
+    });
     // Per-node debug logs (only emitted when the graph's debug flag is on).
     const unLog = onEvent("workflow-log", (payload) => {
       const p = payload as { graph: string; node: number; label: string; message: string; ms: number };
@@ -2054,6 +2088,7 @@
       saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
       unNode.then((u) => u());
+      unArm.then((u) => u());
       unLog.then((u) => u());
       unPrint.then((u) => u());
       unImage.then((u) => u());
@@ -2476,12 +2511,11 @@
       cfg.type = presetVariable.type; // bake the variable's name + type → its dynamic port
     }
     // Local + instant: a real client-assigned id, no server round-trip. Persists on Save (#122).
-    // memoize defaults to FALSE — matching Rust `Graph::add_node`. Sending it explicitly is
     // required: omitting it makes the backend's `#[serde(default = "default_true")]` flip it ON,
     // which silently breaks loop bodies (the node caches after one pass and won't iterate).
     const g = graph;
     const id = nextNodeId(g);
-    g.nodes.push({ id, kind: slug, x, y, config: cfg, memoize: false } as Node);
+    g.nodes.push({ id, kind: slug, x, y, config: cfg } as Node);
     selectedNodeId = id;
     markDirty();
     return id;
@@ -3090,7 +3124,7 @@
   /** The selection as a detached clipboard payload, or null when nothing is selected. Pure — no
    *  toasts, no state written.
    *
-   *  A clipboard entry carries the node's KIND, its panel config, its memoize flag, and where it
+   *  A clipboard entry carries the node's KIND, its panel config, and where it
    *  sat relative to the top-left of the copied set. Deliberately NOT its id (the paste mints one),
    *  NOT its absolute position (the cursor decides that), and NOT its wires (#180).
    *
@@ -3108,7 +3142,6 @@
       nodes: nodes.map((n) => ({
         kind: n.kind,
         config: $state.snapshot(n.config) as Record<string, unknown>,
-        memoize: n.memoize,
         dx: n.x - left,
         dy: n.y - top,
       })),
@@ -3172,7 +3205,6 @@
         x: src.x + DUPLICATE_OFFSET,
         y: src.y + DUPLICATE_OFFSET,
         config: structuredClone($state.snapshot(src.config)) as Record<string, unknown>,
-        memoize: src.memoize,
       } as Node);
     }
     selectedIds = new Set(created);
@@ -3236,7 +3268,6 @@
         x: Math.round(originX + src.dx),
         y: Math.round(originY + src.dy),
         config: structuredClone(src.config) as Record<string, unknown>,
-        memoize: src.memoize,
       } as Node);
     }
     selectedIds = new Set(created);
@@ -3348,11 +3379,6 @@
   function liveSaveConfig(n: Node, key: string, value: unknown) {
     if (!graph) return;
     n.config = { ...n.config, [key]: value };
-    markDirty();
-  }
-  function saveNodeMemoize(n: Node, memoize: boolean) {
-    if (!graph) return;
-    n.memoize = memoize; // local + instant; persists on Save (#122)
     markDirty();
   }
   // Pick a file via a hidden browser input. Browsers don't expose real filesystem paths,
@@ -3916,7 +3942,7 @@
                   {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, e.to_port)}
-                  {@const eLive = nodeLive(e.to)}
+                  {@const eLive = edgeLive(e.from, e.from_port)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   {@const eColorTo = portColorOf(toN, e.to_port, "in")}
                   {@const vk = edgeViaKey(e)}
@@ -5645,24 +5671,6 @@
                     >+ Add arm</Button>
                   </div>
                   <p class="text-[10px] text-muted-foreground">A built-in <strong>default</strong> arm fires when no camera matches.</p>
-                </div>
-              {/if}
-              <!-- Memoize: cache the node's output for the run (default) vs recompute each
-                   time it's reached. Turn OFF for loop bodies / live sources so loops iterate.
-                   Hidden for event nodes — they're no-op signals that never memoize. -->
-              {#if selectedNode.kind !== "emit_event" && selectedNode.kind !== "on_event" && selectedNode.kind !== "comment"}
-                <div class="flex items-center justify-between gap-2 border-t border-border pt-2.5">
-                  <Label
-                    class="flex items-center gap-1.5 text-xs text-muted-foreground"
-                    title={t.memoizeHelp}
-                  >
-                    Memoize output
-                  </Label>
-                  <Switch
-                    checked={selectedNode.memoize === true}
-                    disabled={editLocked}
-                    onCheckedChange={(v) => saveNodeMemoize(selectedNode, v)}
-                  />
                 </div>
               {/if}
             </div>

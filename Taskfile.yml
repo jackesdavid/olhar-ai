@@ -219,16 +219,13 @@ tasks:
       - CLEAN=1 ./deploy/push-local.sh {{.CLI_ARGS}}
 
   clean-space:
-    desc: "Reclaim disk space — cargo clean (edge crate + workspace), drop the installer build dirs, prune Docker. Everything removed is a regenerable build artifact."
+    desc: "Reclaim disk space — Rust targets, Xcode symbol/derived caches, Go/npm/Homebrew caches, Docker. Reports what it left alone and why. Everything removed regenerates on demand."
+    # Card #197. The old version cleaned target/ and Docker — under a gigabyte here — while 32 GB
+    # sat in caches it never looked at, and reported success. This machine is also the CI runner:
+    # when the disk fills, jobs die as `system failure` rather than as a compile error, which
+    # reads like a flake and is not one.
     cmds:
-      # Rust target dirs are by far the biggest: the edge is a standalone crate (its own target/,
-      # incl. the windows-gnu/linux cross builds), the rest is the workspace.
-      - cargo clean --manifest-path sentinel-edge/Cargo.toml
-      - cargo clean
-      - rm -rf deploy/macos-pkg/build deploy/windows/build
-      # Unused images + build cache. Images backing running containers are kept.
-      - docker system prune -af
-      - 'echo "✓ free space now:"; df -h / | tail -1'
+      - ./scripts/clean-space.sh
 
   edge-build:
     desc: Build the edge binary for the current platform (release; pure Rust, no native deps)

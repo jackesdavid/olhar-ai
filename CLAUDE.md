@@ -15,7 +15,10 @@ matches your task:
   the edge installer + binary are served.
   discovery + IP auto-reconcile, health reporting, the restart command, and `install.sh`.
 - **[Workflows engine](docs/ref/workflows.md)** — `sentinel-flow`: graph execution, loops,
-  cross-graph events, run history, camera binding. (Node catalog: [docs/workflow-nodes.md](docs/workflow-nodes.md).)
+  cross-graph events, run history, camera binding — **and the extraction of the engine itself**
+  into [github.com/jackesdavid/graph-engine](https://github.com/jackesdavid/graph-engine)
+  (`ggraph-core`, public), shared with a second product. Card #204. (Node catalog:
+  [docs/workflow-nodes.md](docs/workflow-nodes.md).)
 - **[Tuya integration](docs/ref/tuya.md)** — smart-home provider: one operator Tuya Cloud project
   (HMAC-signed), per-tenant device catalog, the Control/Read Tuya nodes + Integrations page.
 - **[Mobile push](docs/ref/push.md)** — the phone Recipient channel: Expo → APNs/FCM, the TWO
