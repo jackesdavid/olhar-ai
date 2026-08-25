@@ -11,5 +11,6 @@
 //! into an agreement.
 
 pub mod cooldown;
+pub mod display;
 pub mod flip_flop;
 pub mod for_each;

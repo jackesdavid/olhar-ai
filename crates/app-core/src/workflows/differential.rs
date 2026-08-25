@@ -179,6 +179,23 @@ mod tests {
         agree("flip flop", &x);
     }
 
+    /// A display sink: writes durable state and pushes to the editor.
+    ///
+    /// Both schedulers must run it in the same place. The side effects are this product's own —
+    /// the node reaches `ui_tx` directly rather than through an engine trait — so what is
+    /// compared here is position, which is the thing that could differ.
+    #[test]
+    fn a_display_sink_runs_where_it_is_reached() {
+        let mut x = g("display");
+        let src = x.add(NodeKind::Format, 0, 0);
+        x.node_mut(src).unwrap().config = json!({ "template": "42" });
+        // A `Text` sink, not a `Gauge`: gauge's `value` is typed `num` and Format produces
+        // `text`, so the wire is refused — which the port types are doing their job by refusing.
+        let sink = x.add(NodeKind::Text, 200, 0);
+        x.wire(src, "text", sink, "value").unwrap();
+        agree("display", &x);
+    }
+
     #[test]
     fn a_loop_runs_its_body_once_per_item() {
         let mut x = g("loop");

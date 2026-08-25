@@ -129,6 +129,9 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     if k == NodeKind::FlipFlop {
         return declared.stepping(super::steps::flip_flop::FlipFlop);
     }
+    if k == NodeKind::Text || k == NodeKind::Gauge {
+        return declared.stepping(super::steps::display::Display(k));
+    }
     if node::is_routing(k) {
         declared.routing(Legacy(k))
     } else {
