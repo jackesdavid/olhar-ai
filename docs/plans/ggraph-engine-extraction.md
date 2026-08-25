@@ -633,3 +633,47 @@ sobrevive à migração por anos.
 
 E a razão de reverter em vez de continuar: cada rodada revelava a camada seguinte, o que é o
 sinal de que a estimativa estava errada — não de que faltava pouco.
+
+
+---
+
+# A troca do scheduler, medida (2026-08-25)
+
+O teste diferencial (`workflows/differential.rs`) roda o mesmo grafo pelos dois schedulers e
+exige a mesma sequência de nós. **`KNOWN_DIFFERENCES` está vazio** e cinco formas concordam:
+cadeia, ramo, laço, cooldown e flip-flop.
+
+Isso torna a troca pagável em parcelas: cada kind convertido em `NodeStep` vira mais uma
+concordância medida, e o que falta é uma lista com dificuldade real em vez de estimativa.
+
+## Convertidos
+
+| kind | onde | o que exercita |
+|---|---|---|
+| `ForEach` | `steps/for_each.rs` | reentrada; o índice saiu do `loop_state` do driver para o `scratch` da engine |
+| `Cooldown` | `steps/cooldown.rs` | estado durável; o carimbo fica em ms sob `last_ms` por compatibilidade |
+| `FlipFlop` | `steps/flip_flop.rs` | estado durável alternado |
+| `Comment` | registry | `Behavior::Inert` — real, ligável, sem comportamento |
+
+## O que falta, por dificuldade medida
+
+| kind | linhas inline | o que torna difícil |
+|---|---|---|
+| `EmitEvent` | 10 | precisa do callback `emit` no `StepCx` — a engine não tem barramento de eventos |
+| `ShowImage` | 32 | escreve na UI **e** em estado |
+| `Gauge` | 24 | idem |
+| `OnEvent` | 44 | semeadura de entrada; é o gatilho, não um nó comum |
+| `DelayTrigger` | 132 | janela durável com aresta de descida |
+| `DeviceGate` | 195 | aprovação humana; suspende o run e retoma noutro |
+| `TimeGate` | — | **cria uma thread guardiã** e usa `active_gates` em memória |
+
+Os três últimos são os que decidem o tamanho do resto. `TimeGate` é o pior: uma thread viva não
+é algo que `NodeStep` expresse, e resolvê-lo provavelmente significa que ele vira `schedule()` +
+reentrada, como o `wait` da engine — o que seria uma melhoria, mas é mudança de comportamento e
+precisa do próprio card.
+
+## O que NÃO fazer
+
+Converter um kind e deixar o scheduler daqui usando o bloco inline **é o estado correto** durante
+a migração: os dois caminhos existem, e o diferencial prova que concordam. A troca em si é o
+último passo, quando os doze estiverem convertidos e a lista de formas cobrir o que importa.

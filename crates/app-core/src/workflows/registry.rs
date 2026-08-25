@@ -114,6 +114,12 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     // A kind the scheduler DRIVES gets a real cooperating behaviour; the rest go through the
     // adapter. Each one moved here turns a `KNOWN_DIFFERENCES` entry in the differential test
     // into an agreement, which is how the scheduler swap is being paid for incrementally.
+    // A comment is a label on the canvas. It has no behaviour, and saying so in the type is
+    // better than a scheduler branch that skips it: `Inert` is what the engine calls a node that
+    // is real, wireable and does nothing.
+    if k == NodeKind::Comment {
+        return declared;
+    }
     if k == NodeKind::ForEach {
         return declared.stepping(super::steps::for_each::ForEach);
     }
@@ -226,17 +232,24 @@ mod tests {
         );
     }
 
-    /// Every kind has something to run. `Behavior::Inert` would be a lie here: these nodes all
-    /// do something, and a spec that says otherwise is one the scheduler swap would silently
-    /// turn into a no-op.
+    /// Every kind has something to run, except the ones that genuinely do nothing.
+    ///
+    /// `Behavior::Inert` is a claim, not a default: it says this node is real and wireable and
+    /// has no behaviour. Exactly one kind qualifies — a comment is a label on the canvas. The
+    /// list is pinned rather than the count, so a kind that becomes inert by accident during the
+    /// scheduler swap fails here with its own name instead of passing quietly as a no-op.
     #[test]
-    fn every_kind_has_an_executable_behaviour() {
+    fn only_the_kinds_that_do_nothing_are_inert() {
         let inert: Vec<&str> = registry()
             .all()
             .filter(|s| matches!(s.behavior, Behavior::Inert))
             .map(|s| s.id.as_str())
             .collect();
-        assert!(inert.is_empty(), "no behaviour registered for {inert:?}");
+        assert_eq!(
+            inert,
+            vec!["comment"],
+            "a kind lost its behaviour, or gained an inertness nobody decided on"
+        );
     }
 
     /// A node that CHOOSES an arm is registered as one, and everything else is not.
