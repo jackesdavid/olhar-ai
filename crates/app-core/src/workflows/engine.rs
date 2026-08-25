@@ -41,7 +41,7 @@ pub const WF_MAX_STEPS: u32 = 10_000;
 /// values. A JSON array (`["a","b"]` / `[1,2,3]`) maps each element to a typed `PortValue`
 /// (string→Text, number→Num, bool→Bool, float/other→Text); any other text is split on
 /// commas into `Text` elements. Empty → an empty list (the loop fires `completed`).
-fn parse_text_items(text: &str) -> Vec<PortValue> {
+pub(crate) fn parse_text_items(text: &str) -> Vec<PortValue> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Vec::new();

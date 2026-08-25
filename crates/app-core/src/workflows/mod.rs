@@ -17,6 +17,7 @@ pub mod node;
 pub mod registry;
 pub mod repo;
 pub mod schedule;
+pub mod steps;
 pub mod values;
 
 pub use catalog::catalog_json;

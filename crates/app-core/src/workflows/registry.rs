@@ -111,6 +111,12 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     // them all as `Run` was the first thing the differential test caught — a Run node fires
     // every declared arm, so `if` fired `true` and `false` together and the engine ran both
     // branches of every graph.
+    // A kind the scheduler DRIVES gets a real cooperating behaviour; the rest go through the
+    // adapter. Each one moved here turns a `KNOWN_DIFFERENCES` entry in the differential test
+    // into an agreement, which is how the scheduler swap is being paid for incrementally.
+    if k == NodeKind::ForEach {
+        return declared.stepping(super::steps::for_each::ForEach);
+    }
     if node::is_routing(k) {
         declared.routing(Legacy(k))
     } else {
