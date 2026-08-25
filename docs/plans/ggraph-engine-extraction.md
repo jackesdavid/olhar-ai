@@ -659,9 +659,9 @@ concordância medida, e o que falta é uma lista com dificuldade real em vez de 
 
 | kind | linhas inline | o que torna difícil |
 |---|---|---|
-| `EmitEvent` | 10 | precisa do callback `emit` no `StepCx` — a engine não tem barramento de eventos |
-| `ShowImage` | 32 | escreve na UI **e** em estado |
-| `Gauge` | 24 | idem |
+| ~~`EmitEvent`~~ | ~~10~~ | **feito** (`steps/emit_event.rs`) — e a mudança estrutural que ele exigia valeu: `EventEmitter` é um trait no `ToolContext`, populado pelo flow, do jeito que `ui_tx` já era. O nó alcança direto e nenhum trait da engine aprendeu o que é um evento aqui. Contexto sem barramento deixa `None` e o nó **diz** que não disparou, em vez de reportar um disparo que não chegou a ninguém. |
+| ~~`Gauge`/`Text`~~ | ~~24~~ | **feito** (`steps/display.rs`) — e a lição está lá: o nó alcança `ui_tx` pelo `tools()`, direto. O `UiEvent` da engine tem duas variantes e teria de crescer uma por produto para carregar um `ShowValue`, que é exatamente o acoplamento que a extração existe para evitar. |
+| ~~`ShowImage`~~ | ~~32~~ | **feito** (`steps/show_image.rs`) |
 | `OnEvent` | 44 | semeadura de entrada; é o gatilho, não um nó comum |
 | `DelayTrigger` | 132 | janela durável com aresta de descida |
 | `DeviceGate` | 195 | aprovação humana; suspende o run e retoma noutro |

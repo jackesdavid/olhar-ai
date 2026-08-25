@@ -130,6 +130,10 @@ pub struct ToolContext {
     /// that ANSWERED are two separate entries in the history by design (map decision 03), and this
     /// is the only thing that joins them.
     pub run_id: uuid::Uuid,
+    /// Fires cross-graph events, when something is listening. `None` in a context with no event
+    /// bus — a test, a one-shot tool run — and the emitting node reports that rather than
+    /// silently succeeding.
+    pub emitter: Option<std::sync::Arc<dyn crate::workflows::emit::EventEmitter>>,
 }
 
 impl ToolContext {
@@ -150,6 +154,7 @@ impl ToolContext {
             tenant_id,
         });
         ToolContext {
+            emitter: None,
             devices,
             db,
             tenant_id,

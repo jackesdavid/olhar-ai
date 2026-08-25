@@ -20,6 +20,18 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #207 Time Gate keeps a keeper thread; Delay Trigger already knows better
+	  - Plan: [[time-gate-should-not-hold-a-thread]]
+	  - TimeGate spawns a thread that POLLS the database every 250ms for the whole window, and
+	    holds the run open while it does. DelayTrigger has the same shape and uses
+	    `try_arm_node_state` + a `work_jobs` row with `run_after`, with the trailing edge
+	    arriving as a NEW run. Same problem, two solutions, one of them from before the queue.
+	  - BEHAVIOUR CHANGE, and it is the whole decision: `out` fires in the same run today and
+	    in a new one afterwards. Run history splits, and downstream stops seeing run-scoped
+	    variables set before the gate. DelayTrigger already lives with all three.
+	  - TRAP (documented next door): the test for "window closed" is the MARKER in the entry
+	    payload, not `forced` alone — a loop back-edge forces a node too.
+
 - [x] #206 Edge highlight follows the target node, not the arm that fired
 	  - Plan: [[edge-highlight-follows-the-target]]
 	  - `+page.svelte:3911` lights an edge when its TARGET is live, so with two branches

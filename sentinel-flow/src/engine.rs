@@ -813,6 +813,13 @@ fn build_run_context(
     });
 
     let mut ctx = ToolContext::new_local(devices, state.db.clone(), tenant, notif, notif_cfg, tx);
+    // The event bus, reachable by the emitting node itself rather than through a scheduler
+    // callback. `fire_event` needs this runtime's own state — the listener registry, the tenant's
+    // devices for camera-scoped delivery — none of which belongs in an engine trait.
+    ctx.emitter = Some(Arc::new(BusEmitter {
+        state: Arc::clone(state),
+        tenant,
+    }));
     // keeps the connection warm across every `GetFrame`/`Snapshot` in the run, so a
     // `memoize=false` node in a loop re-grabs a fresh frame without re-handshaking.
     ctx.frames = Arc::new(app_core::ports::EdgeFrameSource::with_sse(
@@ -892,5 +899,36 @@ mod tests {
     fn total_in_flight_ignores_settled_graphs() {
         let a = activity_with(&[("event", 0), ("cron", 4)]);
         assert_eq!(total_in_flight(&a), 4);
+    }
+}
+
+
+/// Fires a graph's events onto this runtime's bus.
+///
+/// The graph's NAME is resolved here rather than passed in: it is for display, and the id is
+/// what identifies the emitter. A caller holding only an id should not have to carry a label
+/// around to fire an event.
+struct BusEmitter {
+    state: Arc<AppState>,
+    tenant: Uuid,
+}
+
+impl app_core::workflows::emit::EventEmitter for BusEmitter {
+    fn emit(&self, graph: Uuid, event: &str, run_id: Uuid, payload: &PortValues) {
+        // Looked up rather than carried: the name is for display, and a caller holding an id
+        // should not have to carry a label around to fire an event.
+        let name = crate::state::find_graph(&self.state.store, self.tenant, graph)
+            .map(|g| g.name)
+            .unwrap_or_else(|| graph.to_string());
+        // The listener count is only actionable for durable inbound events (see the consumer),
+        // so it is discarded here.
+        let _ = fire_event(
+            &self.state,
+            self.tenant,
+            EventSource::Graph { id: graph, name },
+            event.to_string(),
+            Some(run_id),
+            payload.clone(),
+        );
     }
 }
