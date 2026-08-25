@@ -155,7 +155,7 @@ fn shapes() -> Vec<(&'static str, Graph)> {
 // Running them
 // ---------------------------------------------------------------------------------------
 
-fn test_ctx() -> ToolContext {
+pub(super) fn test_ctx() -> ToolContext {
     let (tx, _rx) = std::sync::mpsc::channel();
     ToolContext::new_local(
         std::sync::Arc::new(std::sync::Mutex::new(vec![])),

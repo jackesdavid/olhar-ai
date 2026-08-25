@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod compat;
 pub mod device_gate;
+pub mod differential;
 pub mod domain;
 pub mod engine;
 #[cfg(test)]
