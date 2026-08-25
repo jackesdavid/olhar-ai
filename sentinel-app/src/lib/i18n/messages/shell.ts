@@ -4,6 +4,8 @@ export const shell = {
   en: {
     expandSidebar: "Expand sidebar",
     collapseSidebar: "Collapse sidebar",
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
     signedIn: "Signed in",
     signOut: "Sign out",
     switchToLight: "Switch to light",
@@ -36,6 +38,8 @@ export const shell = {
   pt: {
     expandSidebar: "Expandir menu",
     collapseSidebar: "Recolher menu",
+    openMenu: "Abrir menu",
+    closeMenu: "Fechar menu",
     signedIn: "Conectado",
     signOut: "Sair",
     switchToLight: "Mudar para claro",
