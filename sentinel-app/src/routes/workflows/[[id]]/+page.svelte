@@ -825,6 +825,28 @@
   const liveTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let runEnded = false;
 
+  // Which exec ARMS fired, keyed `node:port` — driven by workflow-arm events. An edge is lit by
+  // its own source arm, not by whether its target is live: with two branches converging on one
+  // node, the target rule lights both incoming edges and only one of them carried control (#206).
+  const liveArms = $state<Record<string, true>>({});
+  const armTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function markArmLive(nodeId: number, port: string) {
+    const key = `${nodeId}:${port}`;
+    const prev = armTimers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    liveArms[key] = true;
+    armTimers.set(key, setTimeout(() => {
+      armTimers.delete(key);
+      delete liveArms[key];
+    }, MIN_HIGHLIGHT_MS));
+  }
+
+  /** Did control travel along this edge? */
+  function edgeLive(from: number, fromPort: string): boolean {
+    return `${from}:${fromPort}` in liveArms;
+  }
+
   function markLive(nodeId: number) {
     runEnded = false;
     const prev = liveTimers.get(nodeId);
@@ -845,11 +867,17 @@
       const id = Number(k);
       if (!liveTimers.has(id)) delete liveNodes[id];
     }
+    for (const k of Object.keys(liveArms)) {
+      if (!armTimers.has(k)) delete liveArms[k];
+    }
   }
   function clearLive() {
     for (const t of liveTimers.values()) clearTimeout(t);
     liveTimers.clear();
     for (const k in liveNodes) delete liveNodes[Number(k)];
+    for (const t of armTimers.values()) clearTimeout(t);
+    armTimers.clear();
+    for (const k in liveArms) delete liveArms[k];
     runEnded = false;
   }
 
@@ -1955,6 +1983,11 @@
       const p = payload as { graph: string; node: number };
       if (p.graph === selectedGraphId) markLive(p.node);
     });
+    // Which exec arm fired — the only thing that says which EDGE control took (#206).
+    const unArm = onEvent("workflow-arm", (payload) => {
+      const p = payload as { graph: string; node: number; port: string };
+      if (p.graph === selectedGraphId) markArmLive(p.node, p.port);
+    });
     // Per-node debug logs (only emitted when the graph's debug flag is on).
     const unLog = onEvent("workflow-log", (payload) => {
       const p = payload as { graph: string; node: number; label: string; message: string; ms: number };
@@ -2055,6 +2088,7 @@
       saveViewport(); // persist the viewport when leaving the page too
       un.then((u) => u());
       unNode.then((u) => u());
+      unArm.then((u) => u());
       unLog.then((u) => u());
       unPrint.then((u) => u());
       unImage.then((u) => u());
@@ -3908,7 +3942,7 @@
                   {@const y1 = outPortY(fromN, e.from_port)}
                   {@const x2 = toN.x}
                   {@const y2 = inPortY(toN, e.to_port)}
-                  {@const eLive = nodeLive(e.to)}
+                  {@const eLive = edgeLive(e.from, e.from_port)}
                   {@const eColor = portColorOf(fromN, e.from_port, "out")}
                   {@const eColorTo = portColorOf(toN, e.to_port, "in")}
                   {@const vk = edgeViaKey(e)}

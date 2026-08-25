@@ -49,9 +49,10 @@ impl Observer for Order {
 fn order_here(g: &Graph, sys: &ToolContext) -> Result<Vec<u32>, String> {
     let mut order = Vec::new();
     let mut on_node = |id: u32| order.push(id);
+    let mut on_arm = |_: u32, _: &str| {};
     let mut on_log = |_: u32, _: &str, _: u128| {};
     let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_dag_eventful(g, sys, &mut on_node, &mut on_log, &mut emit)?;
+    super::engine::run_dag_eventful(g, sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)?;
     Ok(order)
 }
 

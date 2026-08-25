@@ -174,9 +174,10 @@ fn run_order(g: &Graph) -> Vec<u32> {
     let sys = test_ctx();
     let mut order = Vec::new();
     let mut on_node = |id: u32| order.push(id);
+    let mut on_arm = |_: u32, _: &str| {};
     let mut on_log = |_: u32, _: &str, _: u128| {};
     let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_dag_eventful(g, &sys, &mut on_node, &mut on_log, &mut emit)
+    super::engine::run_dag_eventful(g, &sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)
         .unwrap_or_else(|e| panic!("graph {:?} failed to run: {e}", g.name));
     order
 }
@@ -366,6 +367,7 @@ fn an_orphan_pure_source_feeds_a_required_input_on_a_sub_run() {
         switch,
         PortValues::new(),
         &mut on_node,
+        &mut |_: u32, _: &str| {},
         &mut on_log,
         &mut emit,
     )
@@ -400,6 +402,7 @@ fn the_orphan_source_is_read_at_the_moment_its_consumer_runs() {
         switch,
         PortValues::new(),
         &mut on_node,
+        &mut |_: u32, _: &str| {},
         &mut on_log,
         &mut emit,
     )
@@ -467,5 +470,48 @@ fn only_the_get_on_the_live_branch_lights_up() {
     assert!(
         order.iter().position(|n| *n == get_live) < order.iter().position(|n| *n == fmt_live),
         "and it must light up BEFORE the node that reads it, not at the end of the run: {order:?}"
+    );
+}
+
+/// Only the arm that fired is reported, and it names the edge control took.
+///
+/// The canvas lights an edge from its own source arm. Before this the engine reported nothing
+/// about arms at all, so the editor lit every edge entering a live node — right by accident with
+/// one incoming edge, and wrong the moment two branches converge on one node (#206).
+#[test]
+fn the_engine_reports_which_arm_fired_not_which_node_was_reached() {
+    let mut g = graph("golden: two branches, one target", 6);
+
+    let gate = g.add_node(NodeKind::If, 0, 0);
+    cfg(&mut g, gate, json!({ "condition": false }));
+    let target = g.add_node(NodeKind::Print, 300, 0);
+    cfg(
+        &mut g,
+        target,
+        json!({ "message": "reached", "on_screen": false, "level": "info" }),
+    );
+    // BOTH arms of the branch wire into the same node — the shape from the report.
+    wire(&mut g, gate, "true", target, "exec_in");
+    wire(&mut g, gate, "false", target, "exec_in");
+
+    let sys = test_ctx();
+    let mut arms: Vec<(u32, String)> = Vec::new();
+    let mut on_node = |_: u32| {};
+    let mut on_arm = |nid: u32, port: &str| arms.push((nid, port.to_string()));
+    let mut on_log = |_: u32, _: &str, _: u128| {};
+    let mut emit = |_: &str, _: &PortValues| {};
+    super::engine::run_dag_eventful(&g, &sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)
+        .expect("runs");
+
+    let from_gate: Vec<&String> = arms
+        .iter()
+        .filter(|(n, _)| *n == gate)
+        .map(|(_, p)| p)
+        .collect();
+    assert_eq!(
+        from_gate,
+        vec!["false"],
+        "the condition is false, so only the false arm fired. Reporting both — or reporting the \
+         node instead of the arm — is what made the canvas light both edges: {arms:?}"
     );
 }

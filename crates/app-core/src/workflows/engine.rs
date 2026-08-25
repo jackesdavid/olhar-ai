@@ -61,7 +61,7 @@ fn json_to_port_value(v: &serde_json::Value) -> PortValue {
 /// Run the whole graph once in topological order. Each node runs at most once; inputs
 /// resolve from upstream outputs (wired edges) else config literals; stops on first error.
 pub fn run_dag(graph: &Graph, sys: &ToolContext) -> Result<HashMap<u32, PortValues>, String> {
-    run_dag_with(graph, sys, &mut |_| {}, &mut |_, _, _| {})
+    run_dag_with(graph, sys, &mut |_| {}, &mut |_, _| {}, &mut |_, _, _| {})
 }
 
 /// Like [`run_dag`], but calls `on_node(id)` just before each node executes (so the
@@ -72,6 +72,10 @@ pub fn run_dag_with(
     graph: &Graph,
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
+    // `on_arm` is the only thing that says WHICH edge control travelled along. Without it an
+    // editor lights every edge into a live node, which is right by accident until two branches
+    // converge on one (#206).
+    on_arm: &mut dyn FnMut(u32, &str),
     on_log: &mut dyn FnMut(u32, &str, u128),
 ) -> Result<HashMap<u32, PortValues>, String> {
     run_driver(
@@ -81,6 +85,7 @@ pub fn run_dag_with(
         &HashSet::new(),
         &PortValues::new(),
         on_node,
+        on_arm,
         on_log,
         &mut |_, _| {},
     )
@@ -93,6 +98,10 @@ pub fn run_dag_eventful(
     graph: &Graph,
     sys: &ToolContext,
     on_node: &mut dyn FnMut(u32),
+    // `on_arm` is the only thing that says WHICH edge control travelled along. Without it an
+    // editor lights every edge into a live node, which is right by accident until two branches
+    // converge on one (#206).
+    on_arm: &mut dyn FnMut(u32, &str),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
@@ -103,6 +112,7 @@ pub fn run_dag_eventful(
         &HashSet::new(),
         &PortValues::new(),
         on_node,
+        on_arm,
         on_log,
         emit,
     )
@@ -118,6 +128,10 @@ pub fn run_subpath_eventful(
     entry: u32,
     entry_payload: PortValues,
     on_node: &mut dyn FnMut(u32),
+    // `on_arm` is the only thing that says WHICH edge control travelled along. Without it an
+    // editor lights every edge into a live node, which is right by accident until two branches
+    // converge on one (#206).
+    on_arm: &mut dyn FnMut(u32, &str),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
@@ -130,6 +144,7 @@ pub fn run_subpath_eventful(
         &forced,
         &entry_payload,
         on_node,
+        on_arm,
         on_log,
         emit,
     )
@@ -189,6 +204,10 @@ fn run_driver(
     initial_forced: &HashSet<u32>,
     entry_payload: &PortValues,
     on_node: &mut dyn FnMut(u32),
+    // `on_arm` is the only thing that says WHICH edge control travelled along. Without it an
+    // editor lights every edge into a live node, which is right by accident until two branches
+    // converge on one (#206).
+    on_arm: &mut dyn FnMut(u32, &str),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
@@ -283,6 +302,7 @@ fn run_driver(
         &mut loop_state,
         &mut steps,
         on_node,
+        on_arm,
         on_log,
         emit,
         &mut deferred_get_logs,
@@ -306,6 +326,7 @@ fn run_driver(
             &mut loop_state,
             &mut steps,
             on_node,
+            on_arm,
             on_log,
             emit,
             &mut deferred_get_logs,
@@ -404,6 +425,10 @@ fn forward_epoch(
     loop_state: &mut HashMap<u32, usize>,
     steps: &mut u32,
     on_node: &mut dyn FnMut(u32),
+    // `on_arm` is the only thing that says WHICH edge control travelled along. Without it an
+    // editor lights every edge into a live node, which is right by accident until two branches
+    // converge on one (#206).
+    on_arm: &mut dyn FnMut(u32, &str),
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
     deferred_get_logs: &mut Vec<(u32, String, u128)>,
@@ -1373,6 +1398,7 @@ fn forward_epoch(
         // too, and the differential test fails the moment they disagree — which is the only way
         // to keep an editor from drawing a live edge the run never takes.
         for arm in node::arms_for(n.kind, &n.config, &inputs, &o) {
+            on_arm(nid, &arm);
             live_out.insert((nid, arm));
         }
         outputs.insert(nid, o);
@@ -1623,6 +1649,7 @@ mod tests {
             entry,
             PortValues::new(),
             &mut |_| {},
+            &mut |_, _| {},
             &mut |_, _, _| {},
             &mut |_, _| {},
         )
@@ -1760,6 +1787,7 @@ mod tests {
             g,
             ctx,
             &mut |id| acts.borrow_mut().push(id),
+            &mut |_, _| {},
             &mut |id, m, _| logs.borrow_mut().push((id, m.to_string())),
         )
         .unwrap();
@@ -2091,9 +2119,14 @@ mod tests {
         g.add_edge(on, "exec_out", fmt, "exec_in").unwrap();
 
         let mut fired: Vec<String> = Vec::new();
-        let outs = run_dag_eventful(&g, &ctx, &mut |_| {}, &mut |_, _, _| {}, &mut |ev, _| {
-            fired.push(ev.to_string())
-        })
+        let outs = run_dag_eventful(
+            &g,
+            &ctx,
+            &mut |_| {},
+            &mut |_, _| {},
+            &mut |_, _, _| {},
+            &mut |ev, _| fired.push(ev.to_string()),
+        )
         .unwrap();
         assert_eq!(fired, vec!["seen"], "EmitEvent calls the emit sink");
         assert!(outs.contains_key(&em), "EmitEvent ran");
@@ -2115,6 +2148,7 @@ mod tests {
             entry,
             PortValues::new(),
             &mut |_| {},
+            &mut |_, _| {},
             &mut |_, _, _| {},
             &mut |_, _| {},
         )
@@ -2264,6 +2298,7 @@ mod tests {
             entry,
             payload,
             &mut |_| {},
+            &mut |_, _| {},
             &mut |_, _, _| {},
             &mut |_, _| {},
         )
