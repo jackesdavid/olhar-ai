@@ -49,8 +49,10 @@ kanban-plugin: board
 	    that READS it runs, and emitted just before that node. Proven twice — by reverting the
 	    fix and watching the new test fail on the exact node id, and by the reporter seeing the
 	    bug on the deploy before it and gone on the deploy after.
-	  - EM ABERTO: `GetCameraByName` e `GetRecipient` têm a mesma forma e continuam sem o
-	    adiamento, nos dois callbacks.
+	  - FECHADO: o adiamento vale para os quatro `is_pure_source` agora, não só `GetVariable`.
+	    #115 cobriu o caso reportado e deixou `GetCameraByName`/`GetRecipient` de fora por
+	    conservadorismo; têm a mesma forma, ativam por época pela mesma razão, e dois deles
+	    consultam o banco — então braço morto custava query além de realce errado.
 
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]
