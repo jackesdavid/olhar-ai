@@ -816,6 +816,12 @@ fn build_run_context(
     // The event bus, reachable by the emitting node itself rather than through a scheduler
     // callback. `fire_event` needs this runtime's own state — the listener registry, the tenant's
     // devices for camera-scoped delivery — none of which belongs in an engine trait.
+    // What a person reads when this run asks them something. Looked up rather than threaded
+    // through the signature: the id is what identifies the graph, and only messages meant for
+    // people need the name.
+    ctx.graph_name = crate::state::find_graph(&state.store, tenant, graph_id)
+        .map(|g| g.name)
+        .unwrap_or_default();
     ctx.emitter = Some(Arc::new(BusEmitter {
         state: Arc::clone(state),
         tenant,

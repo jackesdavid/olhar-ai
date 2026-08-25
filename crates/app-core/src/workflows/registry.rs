@@ -129,6 +129,9 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     if k == NodeKind::FlipFlop {
         return declared.stepping(super::steps::flip_flop::FlipFlop);
     }
+    if k == NodeKind::DeviceGate {
+        return declared.stepping(super::steps::device_gate::DeviceGate);
+    }
     if k == NodeKind::DelayTrigger {
         return declared.stepping(super::steps::delay_trigger::DelayTrigger);
     }
