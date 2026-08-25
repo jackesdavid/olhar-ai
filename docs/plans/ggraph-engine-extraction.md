@@ -572,3 +572,64 @@ de nó declara o id como constante.
 
 Fase 2: um nó por arquivo e o registry, **in place** no app-core, uma família por MR, com o
 snapshot do catálogo tendo que ficar byte-idêntico depois de cada uma.
+
+
+---
+
+# Registro: `Graph<SentinelMeta>` não é uma fatia (2026-08-25)
+
+**Tentado e revertido.** O plano listava `Graph<SentinelMeta>` e a conversão `NodeKind` → `NodeId`
+como fatias separadas, a segunda depois da primeira. **Elas são uma só**, e a razão é estrutural:
+
+```
+Graph<M>  contém  Vec<GraphNode>  contém  kind: NodeId
+```
+
+Adotar o `Graph` da engine adota o `GraphNode` dela, que carrega identificador aberto — então
+todo lugar que hoje faz `n.kind == NodeKind::X`, `n.kind.slug()`, `match self.kind { ... }` ou
+`impl GraphNode` entra junto. São os 828 braços de despacho, não um refactor de container.
+
+## O que a tentativa mediu
+
+Fui de ~200 erros de compilação até 28 antes de a próxima camada aparecer. A distribuição é útil
+para quem for fazer de verdade:
+
+| | |
+|---|---|
+| `add_node(NodeKind::X, ..)` | 144 — **resolvido na engine**, não aqui |
+| acessos a campo do produto (`g.debug` → `g.meta.debug`) | 80, guiados pelo compilador |
+| `.add_edge(` → `.wire(` | 92, rename mecânico |
+| `n.kind == NodeKind::X` | 16 — **resolvidos por um impl**, não um por um |
+| métodos em `NodeId`/`GraphNode` | ~25, à mão |
+
+## A técnica que funciona, e vale reusar
+
+Duas linhas absorveram 16 sítios sem tocar em nenhum:
+
+```rust
+impl PartialEq<NodeKind> for ggraph_core::NodeId { … compara slug … }
+impl From<NodeKind> for ggraph_core::NodeId { … new_static(k.slug()) … }
+```
+
+Mais um trait `AsKind` devolvendo `Option<NodeKind>` — `None` para um kind que este build não
+conhece, em vez de uma resposta errada.
+
+**Isso é o que torna a conversão grande viável**: o enum vira uma *vista* sobre o identificador
+aberto, e o código que ainda raciocina em enum continua legível enquanto é migrado família por
+família. Sem isso, é reescrever 828 braços de uma vez.
+
+## Melhoria que já foi para a engine
+
+`add_node` passou a aceitar `impl Into<NodeId>` (v0.9.1). Um consumidor migrando de enum fechado
+tem uma chamada por nó que já criou — 144 aqui — e fazer cada uma dizer `.into()` é ruído que
+sobrevive à migração por anos.
+
+## Ordem correta, revisada
+
+1. `NodeKind` → `NodeId` **com** `Graph`/`GraphNode`, numa fatia só, usando a camada de
+   compatibilidade acima e migrando família por família com o snapshot do catálogo provando cada
+   passo.
+2. Depois a troca do scheduler, que o teste diferencial já sabe medir.
+
+E a razão de reverter em vez de continuar: cada rodada revelava a camada seguinte, o que é o
+sinal de que a estimativa estava errada — não de que faltava pouco.

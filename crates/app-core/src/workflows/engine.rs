@@ -669,11 +669,16 @@ fn forward_epoch(
             ));
         }
 
-        // A pure `GetVariable` activates every epoch, including on branches nobody took (#205).
-        // Hold its ping until a node that READS it runs, and emit it just before that node —
-        // which is the moment it becomes true that the branch was taken. A Get whose readers all
-        // sat out never pings at all.
-        if n.kind == NodeKind::GetVariable {
+        // A pure source activates every epoch, including on branches nobody took (#205). Hold
+        // its ping until a node that READS it runs, and emit it just before that node — which is
+        // the moment it becomes true that the branch was taken. One whose readers all sat out
+        // never pings at all.
+        //
+        // All four of them, not just `GetVariable`. #115 covered the reported case and left
+        // `GetCameraByName` and `GetRecipient` alone as the conservative choice; they have the
+        // same shape, they activate every epoch for the same reason, and two of them read the
+        // database — so a dead branch was costing a query as well as a wrong highlight.
+        if n.kind.as_kind().is_some_and(|k| k.is_pure_source()) {
             if !deferred_get_nodes.contains(&nid) {
                 deferred_get_nodes.push(nid);
             }
@@ -1330,12 +1335,11 @@ fn forward_epoch(
 
         if graph.meta.debug {
             let summary = node::debug_summary(kind_of(n)?, &n.config, &inputs, &o);
-            // A pure `GetVariable` activates every run/epoch even when the branch it feeds is never
-            // reached (#115). Defer its emit rather than logging here — `run_driver` flushes it only
-            // if a node it feeds actually ran. Buffer once per node id, in activation order; other
-            // kinds log inline as before. (Only `GetVariable`: the reported, conservative case —
-            // `GetCameraByName`/`GetRecipient` are left untouched.)
-            if n.kind == NodeKind::GetVariable {
+            // A pure source activates every run/epoch even when the branch it feeds is never
+            // reached (#115). Defer its emit rather than logging here — `run_driver` flushes it
+            // only if a node it feeds actually ran. Buffered once per node id, in activation
+            // order; other kinds log inline as before.
+            if n.kind.as_kind().is_some_and(|k| k.is_pure_source()) {
                 if !deferred_get_logs.iter().any(|(id, _, _)| *id == nid) {
                     deferred_get_logs.push((nid, summary, elapsed_ms));
                 }

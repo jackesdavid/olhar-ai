@@ -141,6 +141,25 @@ whose code was fine, and it reads exactly like a flake.
 
 ---
 
+## The cleanup was making builds slower (2026-08-25)
+
+`clean-space` ran `docker system prune -af`, which takes the **build cache** along with the
+unused images. This machine is the CI runner, so that cache is what a `cargo chef` layer is
+restored from — and without it every Rust build starts from nothing.
+
+Measured across the runs of one afternoon: `build:rust` went **24 → 25 → 43 minutes**, and
+`docker system df` reported `Build Cache 0B` after each cleanup. The cleanup was buying disk
+with about twenty minutes of every subsequent build.
+
+**Fixed:** `docker image prune -af` for the images, and `docker builder prune -f --filter
+until=168h` for the cache — trimmed rather than emptied. A week is long enough that an ordinary
+week of commits keeps hitting it, and short enough that a branch nobody has touched since is not
+being stored for free.
+
+What that costs in reclaimed space is small: at the time of the change, `docker system df`
+reported 4.999 GB of images with 1.473 GB reclaimable. The images were never where the space
+was — **local volumes are 28.94 GB with 12 GB reclaimable**, which is the same finding as the
+first measurement and is still deliberately manual, because the local Postgres lives there.
 ## The daemon also dies with plenty of disk (2026-08-25)
 
 Three times in one day every job in a pipeline failed at once with:
