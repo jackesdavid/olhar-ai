@@ -145,6 +145,40 @@ mod tests {
         agree("branch", &x);
     }
 
+    /// A node with DURABLE state, driven by the scheduler here and cooperating with the engine.
+    ///
+    /// The interesting half is not that both fire — it is that both fire ONCE. A cooldown whose
+    /// stamp the two schedulers wrote differently would show up as one of them opening a second
+    /// time, and that is exactly the kind of difference nobody notices until a person gets forty
+    /// notifications.
+    #[test]
+    fn a_cooldown_opens_once() {
+        let mut x = g("cooldown");
+        let gate = x.add(NodeKind::Cooldown, 0, 0);
+        x.node_mut(gate).unwrap().config = json!({ "window_secs": "60" });
+        let after = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(after).unwrap().config =
+            json!({ "message": "through", "level": "info", "on_screen": false });
+        x.wire(gate, "exec_out", after, "exec_in").unwrap();
+        agree("cooldown", &x);
+    }
+
+    /// Alternating state, same question.
+    #[test]
+    fn a_flip_flop_takes_one_side() {
+        let mut x = g("flip flop");
+        let ff = x.add(NodeKind::FlipFlop, 0, 0);
+        let a = x.add(NodeKind::Print, 200, -60);
+        x.node_mut(a).unwrap().config =
+            json!({ "message": "a", "level": "info", "on_screen": false });
+        let b = x.add(NodeKind::Print, 200, 60);
+        x.node_mut(b).unwrap().config =
+            json!({ "message": "b", "level": "info", "on_screen": false });
+        x.wire(ff, "a", a, "exec_in").unwrap();
+        x.wire(ff, "b", b, "exec_in").unwrap();
+        agree("flip flop", &x);
+    }
+
     #[test]
     fn a_loop_runs_its_body_once_per_item() {
         let mut x = g("loop");

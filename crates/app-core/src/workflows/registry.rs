@@ -117,6 +117,12 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     if k == NodeKind::ForEach {
         return declared.stepping(super::steps::for_each::ForEach);
     }
+    if k == NodeKind::Cooldown {
+        return declared.stepping(super::steps::cooldown::Cooldown);
+    }
+    if k == NodeKind::FlipFlop {
+        return declared.stepping(super::steps::flip_flop::FlipFlop);
+    }
     if node::is_routing(k) {
         declared.routing(Legacy(k))
     } else {

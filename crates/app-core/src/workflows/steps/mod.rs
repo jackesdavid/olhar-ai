@@ -10,4 +10,6 @@
 //! differential test measures — each kind converted turns one more `KNOWN_DIFFERENCES` entry
 //! into an agreement.
 
+pub mod cooldown;
+pub mod flip_flop;
 pub mod for_each;
