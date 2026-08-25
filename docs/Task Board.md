@@ -190,9 +190,12 @@ kanban-plugin: board
 	  - Fase 2 FEITA e VERIFICADA em produção: portas tipadas, Edge, regra de compatibilidade e
 	    os 91 kinds num registry da engine. O catálogo passou a responder certo para os seis nós
 	    de config — era um bug antigo: o endpoint lia a tabela estática e o scheduler a dinâmica.
-	  - PRÓXIMO: `Graph<SentinelMeta>`, depois a troca do scheduler (19 blocos inline viram
-	    NodeStep). A troca precisa de um teste diferencial — mesmo grafo, dois schedulers,
-	    mesma sequência de nós — antes de ser segura.
+	  - CORRIGIDO no plano: `Graph<SentinelMeta>` NÃO é uma fatia separada. `Graph<M>` contém
+	    `GraphNode`, que contém `NodeId` — então adotá-lo arrasta a conversão NodeKind→NodeId
+	    inteira (os 828 braços). Tentado e revertido; a nota tem os números e a técnica.
+	  - PRÓXIMO: NodeKind→NodeId + Graph/GraphNode numa fatia só, família por família, com a
+	    camada de compatibilidade (`PartialEq<NodeKind> for NodeId`, `From`, `AsKind`) que
+	    absorveu 16 sítios sem tocar em nenhum. Depois a troca do scheduler.
 
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]
