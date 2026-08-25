@@ -137,3 +137,30 @@ whose code was fine, and it reads exactly like a flake.
 - **Nobody is watching.** Everything above is a cure. There is no alert at, say, 15 GiB free, so
   the first symptom is still a dead pipeline or a shell that cannot run `df`.
 - Docker volumes (24.79 GB, 72% reclaimable per the first measurement) remain manual.
+
+
+---
+
+## The daemon also dies with plenty of disk (2026-08-25)
+
+Three times in one day every job in a pipeline failed at once with:
+
+    ERROR: Job failed (system failure): getting docker info: Cannot connect to the Docker
+    daemon at unix:///Users/jackesdavid/.orbstack/run/docker.sock
+
+The first two were the disk. **The third was not** — 24 GiB free at the time. OrbStack had simply
+stopped, and nothing restarts it: the runner keeps accepting jobs and failing every one of them
+in about ten seconds.
+
+That failure reads exactly like a broken commit if you only look at the pipeline page: seven red
+checks, all at once, on a branch whose code is fine. The tell is the **duration** — ten seconds
+for a job that normally takes minutes means it never started, and a job that never started is
+never the code's fault.
+
+**Recovery is `open -a OrbStack`, wait for `docker info`, then retry the pipeline.** No state is
+lost; the jobs re-run from scratch.
+
+**Still not fixed, and now more clearly worth fixing:** nobody is watching. A dead daemon and a
+full disk produce the same symptom — a wall of red — and both are invisible until somebody looks.
+A check that runs before a job and refuses to start it (rather than failing it) would turn both
+into a queued pipeline instead of a false accusation against a commit.

@@ -64,7 +64,9 @@ kanban-plugin: board
 	    The cause was never Docker — it was 22 G of Xcode symbol/derived caches, which the
 	    old task did not look at. It also reports what it left alone and what is still big.
 	  - REMAINS: nobody is watching. No alert at a low-water mark, so the first symptom is
-	    still a dead pipeline or a shell that cannot run `df`.
+	    still a dead pipeline or a shell that cannot run `df`. And it is WIDER than disk: the
+	    OrbStack daemon died once today with 24 GiB free, producing the same wall of red. The
+	    tell is duration — every job failing in ~10s means none of them started.
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
