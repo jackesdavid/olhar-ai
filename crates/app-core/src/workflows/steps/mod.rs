@@ -15,4 +15,5 @@ pub mod display;
 pub mod emit_event;
 pub mod flip_flop;
 pub mod for_each;
+pub mod on_event;
 pub mod show_image;
