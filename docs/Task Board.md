@@ -29,9 +29,9 @@ kanban-plugin: board
 	    `workflow-arm` event → the editor lights an edge by its own (from, from_port).
 	  - Third bug in one family (#115, #205, #206): the editor inferring what the engine knew
 	    and did not publish. The scheduler is right in all three.
-	  - FIXED: `on_arm` in the driver → `workflow-arm` event → the editor lights an edge by its
-	    own (from, from_port). Test: both arms of an If wired to one node, only `false` is
-	    reported.
+	  - FIXED and VERIFIED in production (2026-08-25) on the BotMessages graph: `on_arm` in the
+	    driver → `workflow-arm` event → the editor lights an edge by its own (from, from_port).
+	    Test: both arms of an If wired to one node, only `false` is reported.
 
 - [x] #205 Pure sources activate on dead branches — the canvas is telling the truth
 	  - Plan: [[pure-sources-run-on-dead-branches]]
@@ -45,11 +45,10 @@ kanban-plugin: board
 	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
 	    the activation: measured, that fails three tests including the #114/#115 one.
 	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
-	  - FIXED (!138, merged): a Get's `on_node` is held until a node that READS it runs, and
-	    emitted just before that node. Proven by reverting the fix and watching the new test
-	    fail on the exact node id. AGUARDA confirmação em produção — o deploy `e4c7b46` estava
-	    subindo quando a sessão foi salva; o repórter já confirmou que o bug reproduz no deploy
-	    anterior, que é a metade "antes" da comparação.
+	  - FIXED and VERIFIED in production (2026-08-25): a Get's `on_node` is held until a node
+	    that READS it runs, and emitted just before that node. Proven twice — by reverting the
+	    fix and watching the new test fail on the exact node id, and by the reporter seeing the
+	    bug on the deploy before it and gone on the deploy after.
 	  - EM ABERTO: `GetCameraByName` e `GetRecipient` têm a mesma forma e continuam sem o
 	    adiamento, nos dois callbacks.
 
@@ -65,6 +64,10 @@ kanban-plugin: board
 	    old task did not look at. It also reports what it left alone and what is still big.
 	  - REMAINS: nobody is watching. No alert at a low-water mark, so the first symptom is
 	    still a dead pipeline or a shell that cannot run `df`.
+	  - FOLLOW-UP (2026-08-25): the cleanup was making builds slower. `docker system prune -af`
+	    took the BUILD CACHE with the images, and this machine is the runner — `build:rust`
+	    went 24 → 43 min and `docker system df` read `Build Cache 0B` after each run. Now
+	    `image prune` plus `builder prune --filter until=168h`: trimmed, not emptied.
 - [ ] #183 CI: image push races the build cache and fails ~once a day
 	  - Plan: [[ci-registry-blob-race]]
 - [ ] #8 Splash should retry on transient `boot_status` DB errors instead of hanging
