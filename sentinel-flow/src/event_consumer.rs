@@ -90,7 +90,7 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
                 .collect();
             let disabled = mine
                 .iter()
-                .filter(|g| !g.enabled)
+                .filter(|g| !g.meta.enabled)
                 .filter(|g| {
                     g.nodes.iter().any(|n| {
                         n.kind == app_core::workflows::domain::NodeKind::OnEvent

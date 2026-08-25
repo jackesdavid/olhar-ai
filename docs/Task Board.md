@@ -65,7 +65,9 @@ kanban-plugin: board
 	    The cause was never Docker — it was 22 G of Xcode symbol/derived caches, which the
 	    old task did not look at. It also reports what it left alone and what is still big.
 	  - REMAINS: nobody is watching. No alert at a low-water mark, so the first symptom is
-	    still a dead pipeline or a shell that cannot run `df`.
+	    still a dead pipeline or a shell that cannot run `df`. And it is WIDER than disk: the
+	    OrbStack daemon died once today with 24 GiB free, producing the same wall of red. The
+	    tell is duration — every job failing in ~10s means none of them started.
 	  - FOLLOW-UP (2026-08-25): the cleanup was making builds slower. `docker system prune -af`
 	    took the BUILD CACHE with the images, and this machine is the runner — `build:rust`
 	    went 24 → 43 min and `docker system df` read `Build Cache 0B` after each run. Now

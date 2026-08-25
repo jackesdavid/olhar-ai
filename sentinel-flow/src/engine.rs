@@ -23,6 +23,7 @@ use app_core::workflows::{
 
 use crate::events;
 use crate::state::{self, Activity, AppState, GraphActivity, WF_GLOBAL_CAP};
+use app_core::workflows::domain::AsKind;
 
 /// Total in-flight runs across every tenant/graph — cron, manual **and** event handlers.
 ///
@@ -242,13 +243,13 @@ fn execute_run(
     let (ctx, drain) = build_run_context(state, tenant, graph.id, run_id);
     // Seed this run's variables from the graph's declared defaults (card #5b) — a Get before any
     // Set then returns the author's default instead of a type-zero.
-    app_core::workflows::node::seed_variable_defaults(&graph.variables, &ctx);
+    app_core::workflows::node::seed_variable_defaults(&graph.meta.variables, &ctx);
     // Then apply this run's input overrides ON TOP, so a value entered at launch beats the stored
     // default while cron/event runs keep using the default (they pass none). Parsed against each
     // variable's declared type; unknown names / unparseable values are dropped (the variable then
     // keeps its default), so a stale prompt can't fail the run.
     if !input_overrides.is_empty() {
-        for decl in &graph.variables {
+        for decl in &graph.meta.variables {
             if let Some(raw) = input_overrides.get(&decl.name) {
                 if let Some(pv) =
                     app_core::workflows::node::parse_variable_value(decl.ty.clone(), raw, &ctx)
@@ -259,11 +260,16 @@ fn execute_run(
         }
     }
     let graph_id = graph.id;
-    let debug = graph.debug;
+    let debug = graph.meta.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.label())).collect();
-    let slugs: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.slug())).collect();
+        graph.nodes.iter().map(|n| (n.id, n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node"))).collect();
+    // Owned, not `&'static str`: a kind's slug now comes from the stored document rather than
+    // from an enum, and a document can name a kind this build does not have a constant for.
+    let slugs: std::collections::HashMap<u32, String> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id, n.kind.as_str().to_string()))
+        .collect();
     let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
 
     let prog = Arc::clone(state);
@@ -312,7 +318,7 @@ fn execute_run(
     let log_logs = logs.clone();
     let mut on_log = |nid: u32, msg: &str, ms: u128| {
         let label = labels.get(&nid).copied().unwrap_or("node");
-        let slug = slugs.get(&nid).copied().unwrap_or("");
+        let slug = slugs.get(&nid).cloned().unwrap_or_default();
         events::publish(
             &log_state.events,
             "workflow-log",
@@ -470,7 +476,7 @@ pub fn fire_event(
     let listeners: Vec<(Uuid, String, u32)> = {
         let s = state.store.lock().unwrap();
         s.iter()
-            .filter(|(t, g)| *t == tenant && g.enabled)
+            .filter(|(t, g)| *t == tenant && g.meta.enabled)
             .filter_map(|(_, g)| {
                 workflows::on_event_node(g, &event, event_camera.as_deref(), &devices)
                     .map(|e| (g.id, g.name.clone(), e))
@@ -529,13 +535,13 @@ pub fn fire_event(
             s.iter()
                 .find(|(t, g)| *t == tenant && g.id == listener_id)
                 .map(|(_, g)| {
-                    let max = match &g.concurrency {
+                    let max = match &g.meta.concurrency {
                         app_core::workflows::domain::ConcurrencyPolicy::Concurrent {
                             max_concurrent,
                         } => *max_concurrent as usize,
                         _ => 1,
                     };
-                    (max, g.instance_scope.key_for(&payload))
+                    (max, g.meta.instance_scope.key_for(&payload))
                 })
                 .unwrap_or((1, String::new()))
         };

@@ -1,17 +1,6 @@
 {
   "id": "03030303-0303-0303-0303-030303030303",
   "name": "golden: switch",
-  "description": "",
-  "group": "",
-  "enabled": true,
-  "trigger": "Manual",
-  "concurrency": "SkipIfRunning",
-  "instance_scope": "Single",
-  "run_orphans": false,
-  "debug": false,
-  "template": false,
-  "global": false,
-  "next_id": 5,
   "nodes": [
     {
       "id": 1,
@@ -86,6 +75,17 @@
       "to_port": "exec_in"
     }
   ],
+  "next_id": 5,
+  "description": "",
+  "group": "",
+  "enabled": true,
+  "trigger": "Manual",
+  "concurrency": "SkipIfRunning",
+  "instance_scope": "Single",
+  "run_orphans": false,
+  "debug": false,
+  "template": false,
+  "global": false,
   "viewport": {
     "x": 40.0,
     "y": 40.0,

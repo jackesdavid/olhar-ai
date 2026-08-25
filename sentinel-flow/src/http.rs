@@ -61,7 +61,7 @@ async fn reload_graphs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     state.reload_graphs();
     let (n, enabled) = {
         let s = state.store.lock().unwrap();
-        (s.len(), s.iter().filter(|(_, g)| g.enabled).count())
+        (s.len(), s.iter().filter(|(_, g)| g.meta.enabled).count())
     };
     // Log the pod + enabled count so a store divergence across replicas (the cause of "some events
     // ran, some didn't") is visible in Datadog: compare `enabled` across pods for the same reload.
@@ -132,7 +132,7 @@ async fn create_run(
             Json(json!({ "error": "no such graph" })),
         );
     };
-    let policy = graph.concurrency.clone();
+    let policy = graph.meta.concurrency.clone();
     // Raw input strings flow straight through — execute_run parses them against the graph's
     // variable types with the run's real context.
     engine::fire_graph(

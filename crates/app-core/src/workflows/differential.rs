@@ -11,6 +11,9 @@
 //!
 //! ## What this is not
 //!
+//! The conversion this needed is gone: this product's `Graph` IS the engine's, so both
+//! schedulers read the same document rather than one reading a copy of it.
+//!
 //! It is not a claim that the schedulers agree in general. It is a growing corpus, and the
 //! honest reading of a passing run is "these shapes agree", nothing wider. Shapes are added as
 //! they are understood; [`KNOWN_DIFFERENCES`] lists the ones that do not agree yet and why,
@@ -20,19 +23,14 @@ use super::domain::Graph;
 use super::host::{SentinelHost, SentinelMeta};
 use super::node::PortValues;
 use crate::agent::tools::ToolContext;
+use crate::workflows::domain::GraphExt;
 use ggraph_core::host::{Observer, UiEvent};
 use ggraph_core::{Entry, RunOptions};
 use std::sync::{Arc, Mutex};
 
 /// Shapes that do not agree yet, and why. A shape listed here is skipped by the sweep rather
 /// than silently failing it — a red test nobody can fix is a red test everybody learns to ignore.
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[(
-    "loop",
-    "the engine runs the body once; this product runs it once per item. `ForEach` is driven \
-         by the scheduler here — it is one of the 19 inline `n.kind ==` blocks — and the adapter \
-         cannot drive it, because a Run node cannot ask to be re-entered. Fixed by giving the \
-         cooperating kinds a real `NodeStep`.",
-)];
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Records the order nodes executed in, which is the only thing being compared.
 #[derive(Default)]
@@ -60,9 +58,8 @@ fn order_here(g: &Graph, sys: &ToolContext) -> Result<Vec<u32>, String> {
 fn order_engine(g: &Graph, sys: ToolContext) -> Result<Vec<u32>, String> {
     let rec = Arc::new(Order::default());
     let host = SentinelHost::watching(sys, Box::new(RecRef(rec.clone())));
-    let doc = to_engine_graph(g);
     ggraph_core::run(
-        &doc,
+        g,
         super::registry::registry(),
         &host,
         &Entry::default(),
@@ -83,38 +80,6 @@ impl Observer for RecRef {
     fn ui(&self, node: u32, event: UiEvent) {
         self.0.ui(node, event);
     }
-}
-
-/// This product's `Graph` as the engine's document.
-///
-/// A conversion, not a cast, because this product's `Graph` still owns its own struct. When it
-/// becomes `Graph<SentinelMeta>` this function disappears — and the fact that it is this short
-/// is the evidence that it can.
-fn to_engine_graph(g: &Graph) -> ggraph_core::Graph<SentinelMeta> {
-    let mut doc: ggraph_core::Graph<SentinelMeta> = ggraph_core::Graph::new(&g.name);
-    doc.id = g.id;
-    doc.next_id = g.next_id;
-    doc.meta = SentinelMeta {
-        enabled: g.enabled,
-        trigger: g.trigger.clone(),
-        concurrency: g.concurrency.clone(),
-        instance_scope: g.instance_scope.clone(),
-        run_orphans: g.run_orphans,
-        debug: g.debug,
-    };
-    doc.nodes = g
-        .nodes
-        .iter()
-        .map(|n| ggraph_core::GraphNode {
-            id: n.id,
-            kind: ggraph_core::NodeId::new(n.kind.slug()),
-            x: n.x,
-            y: n.y,
-            config: n.config.clone(),
-        })
-        .collect();
-    doc.edges = g.edges.clone();
-    doc
 }
 
 #[cfg(test)]
@@ -147,48 +112,82 @@ mod tests {
 
     fn g(name: &str) -> Graph {
         let mut g = Graph::new(name);
-        g.enabled = true;
+        g.meta.enabled = true;
         g
     }
 
     #[test]
     fn a_straight_chain() {
         let mut x = g("chain");
-        let a = x.add_node(NodeKind::Print, 0, 0);
+        let a = x.add(NodeKind::Print, 0, 0);
         x.node_mut(a).unwrap().config =
             json!({ "message": "one", "level": "info", "on_screen": false });
-        let b = x.add_node(NodeKind::Print, 200, 0);
+        let b = x.add(NodeKind::Print, 200, 0);
         x.node_mut(b).unwrap().config =
             json!({ "message": "two", "level": "info", "on_screen": false });
-        x.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        x.wire(a, "exec_out", b, "exec_in").unwrap();
         agree("chain", &x);
     }
 
     #[test]
     fn a_branch_leaves_the_other_arm_alone() {
         let mut x = g("branch");
-        let gate = x.add_node(NodeKind::If, 0, 0);
+        let gate = x.add(NodeKind::If, 0, 0);
         x.node_mut(gate).unwrap().config = json!({ "condition": true });
-        let hot = x.add_node(NodeKind::Print, 200, -80);
+        let hot = x.add(NodeKind::Print, 200, -80);
         x.node_mut(hot).unwrap().config =
             json!({ "message": "hot", "level": "info", "on_screen": false });
-        let cold = x.add_node(NodeKind::Print, 200, 80);
+        let cold = x.add(NodeKind::Print, 200, 80);
         x.node_mut(cold).unwrap().config =
             json!({ "message": "cold", "level": "info", "on_screen": false });
-        x.add_edge(gate, "true", hot, "exec_in").unwrap();
-        x.add_edge(gate, "false", cold, "exec_in").unwrap();
+        x.wire(gate, "true", hot, "exec_in").unwrap();
+        x.wire(gate, "false", cold, "exec_in").unwrap();
         agree("branch", &x);
+    }
+
+    /// A node with DURABLE state, driven by the scheduler here and cooperating with the engine.
+    ///
+    /// The interesting half is not that both fire — it is that both fire ONCE. A cooldown whose
+    /// stamp the two schedulers wrote differently would show up as one of them opening a second
+    /// time, and that is exactly the kind of difference nobody notices until a person gets forty
+    /// notifications.
+    #[test]
+    fn a_cooldown_opens_once() {
+        let mut x = g("cooldown");
+        let gate = x.add(NodeKind::Cooldown, 0, 0);
+        x.node_mut(gate).unwrap().config = json!({ "window_secs": "60" });
+        let after = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(after).unwrap().config =
+            json!({ "message": "through", "level": "info", "on_screen": false });
+        x.wire(gate, "exec_out", after, "exec_in").unwrap();
+        agree("cooldown", &x);
+    }
+
+    /// Alternating state, same question.
+    #[test]
+    fn a_flip_flop_takes_one_side() {
+        let mut x = g("flip flop");
+        let ff = x.add(NodeKind::FlipFlop, 0, 0);
+        let a = x.add(NodeKind::Print, 200, -60);
+        x.node_mut(a).unwrap().config =
+            json!({ "message": "a", "level": "info", "on_screen": false });
+        let b = x.add(NodeKind::Print, 200, 60);
+        x.node_mut(b).unwrap().config =
+            json!({ "message": "b", "level": "info", "on_screen": false });
+        x.wire(ff, "a", a, "exec_in").unwrap();
+        x.wire(ff, "b", b, "exec_in").unwrap();
+        agree("flip flop", &x);
     }
 
     #[test]
     fn a_loop_runs_its_body_once_per_item() {
         let mut x = g("loop");
-        let each = x.add_node(NodeKind::ForEach, 0, 0);
+        let each = x.add(NodeKind::ForEach, 0, 0);
         x.node_mut(each).unwrap().config = json!({ "items": "a,b,c" });
-        let body = x.add_node(NodeKind::Print, 200, 0);
+        let body = x.add(NodeKind::Print, 200, 0);
         x.node_mut(body).unwrap().config =
             json!({ "message": "item", "level": "info", "on_screen": false });
-        x.add_edge(each, "loop_body", body, "exec_in").unwrap();
+        x.wire(each, "loop_body", body, "exec_in").unwrap();
         agree("loop", &x);
     }
 }
