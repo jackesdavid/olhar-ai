@@ -13,8 +13,7 @@
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 use crate::db::Db;
 use ggraph_core::host::{
-    ApprovalRequest, Approvals, Host, HostError, Http, HttpRequest, HttpResponse, Llm, LlmRequest,
-    NodeTarget, Observer, Slot, StateKey, StateStore, TableStore, UiEvent, ValueIo,
+    Host, HostError, Literals, NodeTarget, Observer, Slot, StateKey, StateStore, UiEvent, ValueIo,
 };
 use ggraph_core::SmolStr;
 use ggraph_core::Value;
@@ -192,87 +191,39 @@ impl ValueIo for MediaIo {
 // The capabilities this product has not routed through the engine yet
 // ---------------------------------------------------------------------------------------
 
-/// Approvals, HTTP, models and tables reach Sentinel's nodes through `ToolContext` directly
-/// rather than through these traits, because those nodes are this product's own and can.
-///
-/// They are wired to refuse rather than left unimplemented so the shape is honest: a graph that
-/// somehow reaches an engine-provided node needing one gets a clear message instead of a panic.
-pub struct NotRouted;
-
-impl Approvals for NotRouted {
-    fn ask(&self, _: ApprovalRequest) -> Result<Uuid, HostError> {
-        Err(HostError::permanent(
-            "approvals reach this product's Device Gate node directly, not through the engine",
-        ))
-    }
-}
-
-impl Http for NotRouted {
-    fn send(&self, _: HttpRequest) -> Result<HttpResponse, HostError> {
-        Err(HostError::permanent(
-            "http reaches this product's HTTP Post node directly, not through the engine",
-        ))
-    }
-}
-
-impl Llm for NotRouted {
-    fn ask_text(&self, _: LlmRequest) -> Result<String, HostError> {
-        Err(HostError::permanent(
-            "models reach this product's AI nodes directly",
-        ))
-    }
-    fn ask_bool(&self, _: LlmRequest) -> Result<Option<bool>, HostError> {
-        Err(HostError::permanent(
-            "models reach this product's AI nodes directly",
-        ))
-    }
-    fn classify(&self, _: LlmRequest, _: &[String]) -> Result<Option<String>, HostError> {
-        Err(HostError::permanent(
-            "models reach this product's AI nodes directly",
-        ))
-    }
-}
-
-impl TableStore for NotRouted {
-    fn list(&self) -> Result<Vec<String>, HostError> {
-        Ok(Vec::new())
-    }
-    fn read(&self, _: &str) -> Result<Vec<Vec<(String, Value)>>, HostError> {
-        Err(HostError::permanent(
-            "tables reach this product's Dictionary nodes directly",
-        ))
-    }
-    fn row_count(&self, _: &str) -> Result<u64, HostError> {
-        Ok(0)
-    }
-    fn append(&self, _: &str, _: &[(String, Value)]) -> Result<(), HostError> {
-        Err(HostError::permanent(
-            "tables reach this product's Dictionary nodes directly",
-        ))
-    }
-    fn set_cell(&self, _: &str, _: u64, _: &str, _: &Value) -> Result<(), HostError> {
-        Err(HostError::permanent(
-            "tables reach this product's Dictionary nodes directly",
-        ))
-    }
-    fn delete_row(&self, _: &str, _: u64) -> Result<(), HostError> {
-        Err(HostError::permanent(
-            "tables reach this product's Dictionary nodes directly",
-        ))
-    }
-    fn clear(&self, _: &str) -> Result<(), HostError> {
-        Err(HostError::permanent(
-            "tables reach this product's Dictionary nodes directly",
-        ))
-    }
-}
-
 // ---------------------------------------------------------------------------------------
 // The host
 // ---------------------------------------------------------------------------------------
 
+/// Reads a configuration literal for a typed port.
+///
+/// Two of the three cases need `sys` and so could never be a pure read of the config: a camera
+/// literal is a device id resolved against the device store, a table literal a dictionary id
+/// against the run-start snapshot. That is why the engine asks rather than working it out.
+pub struct SentinelLiterals(Arc<ToolContext>);
+
+impl Literals for SentinelLiterals {
+    fn read(
+        &self,
+        _kind: &ggraph_core::NodeId,
+        port: &ggraph_core::Port,
+        config: &Json,
+    ) -> Option<Value> {
+        let name = port.name.as_str();
+        let v = if port.ty == super::domain::types::CAMERA {
+            super::node::resolve_camera_literal(config, name, &self.0)
+        } else if port.ty == super::domain::types::TABLE {
+            super::node::resolve_table_literal(config, name, &self.0)
+        } else {
+            super::node::literal_for_named(config, name, port.ty.clone())
+        };
+        v.as_ref().map(super::compat::to_engine)
+    }
+}
+
 struct Inner {
-    tools: ToolContext,
+    tools: Arc<ToolContext>,
+    literals: SentinelLiterals,
     state: PgState,
     io: MediaIo,
     /// Boxed rather than the concrete [`UiObserver`], so a caller can watch a run without the
@@ -280,8 +231,6 @@ struct Inner {
     /// the engine's needs the node ORDER, and order only exists in the observer — the run's
     /// return value is a map.
     observer: Box<dyn Observer + Send + Sync>,
-    not_routed: NotRouted,
-    vars: Mutex<HashMap<String, Value>>,
 }
 
 /// Everything the engine can reach, plus — through [`tools`](SentinelHost::tools) — everything
@@ -291,6 +240,7 @@ pub struct SentinelHost(Arc<Inner>);
 
 impl SentinelHost {
     pub fn new(tools: ToolContext) -> Self {
+        let tools = Arc::new(tools);
         let state = PgState {
             db: tools.db.clone(),
             tenant: tools.tenant_id,
@@ -299,27 +249,26 @@ impl SentinelHost {
             tx: tools.ui_tx.clone(),
         };
         SentinelHost(Arc::new(Inner {
+            literals: SentinelLiterals(tools.clone()),
             state,
             io: MediaIo,
             observer: Box::new(observer),
-            not_routed: NotRouted,
-            vars: Mutex::new(HashMap::new()),
             tools,
         }))
     }
 
     /// The same host, reporting to `observer` instead of to the editor.
     pub fn watching(tools: ToolContext, observer: Box<dyn Observer + Send + Sync>) -> Self {
+        let tools = Arc::new(tools);
         let state = PgState {
             db: tools.db.clone(),
             tenant: tools.tenant_id,
         };
         SentinelHost(Arc::new(Inner {
+            literals: SentinelLiterals(tools.clone()),
             state,
             io: MediaIo,
             observer,
-            not_routed: NotRouted,
-            vars: Mutex::new(HashMap::new()),
             tools,
         }))
     }
@@ -349,21 +298,6 @@ impl Host for SentinelHost {
     fn observer(&self) -> &dyn Observer {
         self.0.observer.as_ref()
     }
-    fn approvals(&self) -> &dyn Approvals {
-        &self.0.not_routed
-    }
-    fn http(&self) -> &dyn Http {
-        &self.0.not_routed
-    }
-    fn llm(&self) -> &dyn Llm {
-        &self.0.not_routed
-    }
-    fn tables(&self) -> &dyn TableStore {
-        &self.0.not_routed
-    }
-    fn vars(&self) -> &Mutex<HashMap<String, Value>> {
-        &self.0.vars
-    }
     fn run_id(&self) -> Uuid {
         self.0.tools.run_id
     }
@@ -385,26 +319,8 @@ impl Host for SentinelHost {
         }
     }
 
-    fn literal(
-        &self,
-        kind: &ggraph_core::NodeId,
-        port: &ggraph_core::Port,
-        config: &Json,
-    ) -> Option<Value> {
-        // Two of these need `sys` and so cannot be a pure read of the config: a camera literal is
-        // a device id resolved against the device store, and a table literal is a dictionary id
-        // resolved against the run-start snapshot. That is exactly why this is a host method and
-        // not something the engine could work out on its own.
-        let name = port.name.as_str();
-        let v = if port.ty == super::domain::types::CAMERA {
-            super::node::resolve_camera_literal(config, name, &self.0.tools)
-        } else if port.ty == super::domain::types::TABLE {
-            super::node::resolve_table_literal(config, name, &self.0.tools)
-        } else {
-            super::node::literal_for_named(config, name, port.ty.clone())
-        };
-        let _ = kind;
-        v.as_ref().map(super::compat::to_engine)
+    fn literals(&self) -> &dyn Literals {
+        &self.0.literals
     }
 
     fn schedule(&self, at_epoch_secs: i64, target: NodeTarget) -> Result<(), HostError> {

@@ -81,11 +81,11 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     // has exec pins. Deciding purity from `is_pure_source` first silently stripped its exec pin
     // out of the catalog, which the snapshot caught.
     let purity = if !k.is_pure() {
-        Purity::Effectful
+        Purity::EFFECTFUL
     } else if k.is_pure_source() {
-        Purity::PureSource
+        Purity::PURE_SOURCE
     } else {
-        Purity::Pure
+        Purity::PURE
     };
 
     let base = if purity.has_exec() {
