@@ -229,17 +229,70 @@ pub fn resolved_exec_out_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPo
                 required: false,
             })
             .collect(),
-        _ => node.kind.exec_out_ports().to_vec(),
+        _ => node
+            .kind
+            .as_kind()
+            .map(|k| k.exec_out_ports())
+            .unwrap_or(&[])
+            .to_vec(),
     }
 }
 
 fn probe(kind: NodeKind, config: &Value) -> GraphNode {
     GraphNode {
         id: 0,
-        kind,
+        kind: kind.into(),
         x: 0,
         y: 0,
         config: config.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// NodeKind as a view over the engine's open identifier
+// ---------------------------------------------------------------------------------------
+//
+// A stored graph names kinds as strings, and the engine keeps them that way — which is what
+// lets a document mention a kind this build has not been taught yet instead of failing to
+// deserialize. This product still reasons about them as an enum in the places that have not
+// been split into one file per node, and these three impls let both be true at once:
+//
+//   * a `NodeId` compares equal to the `NodeKind` it names, in either direction;
+//   * a `NodeKind` converts into a `NodeId` wherever one is expected;
+//   * `as_kind()` goes back, and answers `None` for a kind this build does not know.
+//
+// The last one is the important one. A wrong answer there would be a node quietly treated as
+// some other node; an absence is something a caller has to decide about.
+
+impl PartialEq<NodeKind> for ggraph_core::NodeId {
+    fn eq(&self, other: &NodeKind) -> bool {
+        self.as_str() == other.slug()
+    }
+}
+
+impl PartialEq<ggraph_core::NodeId> for NodeKind {
+    fn eq(&self, other: &ggraph_core::NodeId) -> bool {
+        self.slug() == other.as_str()
+    }
+}
+
+impl From<NodeKind> for ggraph_core::NodeId {
+    fn from(k: NodeKind) -> Self {
+        // `new_static`: a slug is a `&'static str`, so this never allocates.
+        ggraph_core::NodeId::new_static(k.slug())
+    }
+}
+
+/// This product's view of a stored kind, where it still needs one.
+pub trait AsKind {
+    /// `None` for a kind this build does not know — an older graph meeting a newer deploy, or
+    /// the reverse. Callers decide what that means rather than being handed a wrong answer.
+    fn as_kind(&self) -> Option<NodeKind>;
+}
+
+impl AsKind for ggraph_core::NodeId {
+    fn as_kind(&self) -> Option<NodeKind> {
+        NodeKind::from_slug(self.as_str())
     }
 }
 
@@ -2100,47 +2153,34 @@ impl NodeKind {
 // Graph elements
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GraphNode {
-    pub id: u32,
-    pub kind: NodeKind,
-    /// Canvas position (the Svelte editor owns the units; persisted so layout survives).
-    pub x: i32,
-    pub y: i32,
-    /// Static settings + literal fallbacks for unconnected input ports.
-    #[serde(default)]
-    pub config: Value,
+/// A node in a stored graph — the engine's.
+///
+/// Its `kind` is a [`NodeId`](ggraph_core::NodeId), an open string, rather than this product's
+/// closed enum. That is what lets a document name a kind this build has not been taught yet
+/// instead of failing to deserialize the whole graph. Compare one against [`NodeKind`] directly:
+/// the impls above make that read the way it always did.
+pub type GraphNode = ggraph_core::GraphNode;
+
+/// What a node in THIS product's graphs can answer, beyond what any node can.
+///
+/// A trait rather than an inherent impl, because the node type is the engine's now. The
+/// methods are unchanged; only where they are declared moved.
+pub trait NodeExt {
+    fn cron(&self) -> Option<CronConfig>;
+    fn input_ports(&self) -> Vec<ResolvedPort>;
+    fn output_ports(&self) -> Vec<ResolvedPort>;
+    fn input_port(&self, name: &str) -> Option<ResolvedPort>;
+    fn output_port(&self, name: &str) -> Option<ResolvedPort>;
 }
 
-/// Default grace for a LATE cron fire, in seconds (#cron-node).
-///
-/// A fire missed while flow was down runs if it is less late than this, and is skipped otherwise.
-/// 15 minutes covers the realistic outage — a deploy, a restart, a pod reschedule — and is short
-/// enough that a scheduled light or lock never switches in a visibly wrong part of the day.
-///
-/// The behaviour it replaces was unbounded catch-up, and it was accidental rather than chosen: the
-/// job simply waited in `work_jobs` with a past `run_after` and fired whenever flow returned, so a
-/// missed bedtime switch could land at breakfast.
-pub const DEFAULT_CRON_GRACE_SECS: u64 = 15 * 60;
-
-/// A `When Event` node configured as a schedule rather than an event listener.
-///
-/// The selector lives in the node's config instead of in a separate `NodeKind` because everything
-/// downstream is identical: it is an entry point, it seeds a sub-run, and the graph reads the same
-/// either way. One entry-point concept in the catalog, two sources.
-pub struct CronConfig {
-    pub schedule: Schedule,
-    pub grace_secs: u64,
-}
-
-impl GraphNode {
+impl NodeExt for GraphNode {
     /// This node's cron configuration, or `None` when it is a plain event listener.
     ///
     /// Requires BOTH `source == "cron"` and a parseable schedule. A node marked cron whose schedule
     /// is malformed returns `None` rather than a default: silently scheduling something the user
     /// did not describe is worse than not scheduling it, and an entry point that never fires is
     /// visible in a way that one firing hourly-by-accident is not.
-    pub fn cron(&self) -> Option<CronConfig> {
+    fn cron(&self) -> Option<CronConfig> {
         if self.kind != NodeKind::OnEvent {
             return None;
         }
@@ -2159,46 +2199,42 @@ impl GraphNode {
             grace_secs,
         })
     }
-}
 
-fn default_true() -> bool {
-    true
-}
-
-impl GraphNode {
     /// This node's **effective** input ports. Static for every kind except `EmitEvent`,
     /// whose inputs are one-per-payload-field derived from its config (see [`payload_ports`]).
-    pub fn input_ports(&self) -> Vec<ResolvedPort> {
-        match self.kind {
-            NodeKind::EmitEvent => payload_ports(&self.config),
+    fn input_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind.as_kind() {
+            Some(NodeKind::EmitEvent) => payload_ports(&self.config),
             // Set Variable: one `value` input typed by the variable (required).
-            NodeKind::SetVariable => variable_port(&self.config, true),
+            Some(NodeKind::SetVariable) => variable_port(&self.config, true),
             // Set Variables: one typed input per variable in `config.variables` (see the fn).
-            NodeKind::MultiSetVariable => multi_variable_ports(&self.config),
+            Some(NodeKind::MultiSetVariable) => multi_variable_ports(&self.config),
             // Control Tuya Device: one `value` input typed by the selected data point (optional —
             // config literal is the fallback). See `tuya_value_port`.
-            NodeKind::TuyaControl => tuya_value_port(&self.config),
+            Some(NodeKind::TuyaControl) => tuya_value_port(&self.config),
             // OnEvent: camera/region inputs, only for the edge tracker's events (see the fn doc).
-            NodeKind::OnEvent => on_event_input_ports(&self.config),
+            Some(NodeKind::OnEvent) => on_event_input_ports(&self.config),
             // DictMakeRow: `schema` (Table) + one input per configured column (see `dict_row_ports`).
-            NodeKind::DictMakeRow => dict_row_ports(&self.config),
-            k => k.input_ports().iter().cloned().collect(),
+            Some(NodeKind::DictMakeRow) => dict_row_ports(&self.config),
+            Some(k) => k.input_ports().iter().cloned().collect(),
+            // A kind this build does not know has no ports we can name. An empty list is what a caller reads as 'nothing to wire', which is true.
+            None => Vec::new(),
         }
     }
 
     /// This node's **effective** output ports. Static for every kind except `OnEvent`,
     /// whose outputs are one-per-payload-field derived from its config.
-    pub fn output_ports(&self) -> Vec<ResolvedPort> {
-        match self.kind {
-            NodeKind::OnEvent => payload_ports(&self.config),
+    fn output_ports(&self) -> Vec<ResolvedPort> {
+        match self.kind.as_kind() {
+            Some(NodeKind::OnEvent) => payload_ports(&self.config),
             // Get Variable: one `value` output typed by the variable.
-            NodeKind::GetVariable => variable_port(&self.config, false),
+            Some(NodeKind::GetVariable) => variable_port(&self.config, false),
             // Get Variables: one typed output per variable in `config.variables`.
-            NodeKind::MultiGetVariable => multi_variable_ports(&self.config),
+            Some(NodeKind::MultiGetVariable) => multi_variable_ports(&self.config),
             // Read Tuya Status: `value` typed by the selected data point (+ static `on`/`raw`).
-            NodeKind::TuyaReadStatus => tuya_read_output_ports(&self.config),
+            Some(NodeKind::TuyaReadStatus) => tuya_read_output_ports(&self.config),
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
-            NodeKind::AiExtract => {
+            Some(NodeKind::AiExtract) => {
                 let mut ports = variable_port(&self.config, false);
                 ports.push(ResolvedPort {
                     name: PortName::new("found".to_string()),
@@ -2207,12 +2243,14 @@ impl GraphNode {
                 });
                 ports
             }
-            k => k.output_ports().iter().cloned().collect(),
+            Some(k) => k.output_ports().iter().cloned().collect(),
+            // Same as the inputs: unknown kind, nothing to offer.
+            None => Vec::new(),
         }
     }
 
     /// Look up one input port by name (config-aware), incl. the universal `exec_in`.
-    pub fn input_port(&self, name: &str) -> Option<ResolvedPort> {
+    fn input_port(&self, name: &str) -> Option<ResolvedPort> {
         if name == EXEC_IN.name {
             return Some(EXEC_IN.clone());
         }
@@ -2220,7 +2258,7 @@ impl GraphNode {
     }
 
     /// Look up one output port by name (config-aware), incl. the kind's exec_out pins.
-    pub fn output_port(&self, name: &str) -> Option<ResolvedPort> {
+    fn output_port(&self, name: &str) -> Option<ResolvedPort> {
         // StringSwitch / AiSwitch: exec outputs are user-defined arm labels + the fixed "default"
         // arm. These are instance-level (stored in config), not on the static kind. AiSwitch shares
         // StringSwitch's arm shape — it just picks the arm by meaning instead of exact match.
@@ -2249,11 +2287,43 @@ impl GraphNode {
             }
             return None;
         }
-        if let Some(e) = self.kind.exec_out_ports().iter().find(|p| p.name == name) {
+        if let Some(e) = self
+            .kind
+            .as_kind()
+            .map(|k| k.exec_out_ports())
+            .unwrap_or(&[])
+            .iter()
+            .find(|p| p.name == name)
+        {
             return Some(e.clone());
         }
         self.output_ports().into_iter().find(|p| p.name == name)
     }
+}
+
+/// Default grace for a LATE cron fire, in seconds (#cron-node).
+///
+/// A fire missed while flow was down runs if it is less late than this, and is skipped otherwise.
+/// 15 minutes covers the realistic outage — a deploy, a restart, a pod reschedule — and is short
+/// enough that a scheduled light or lock never switches in a visibly wrong part of the day.
+///
+/// The behaviour it replaces was unbounded catch-up, and it was accidental rather than chosen: the
+/// job simply waited in `work_jobs` with a past `run_after` and fired whenever flow returned, so a
+/// missed bedtime switch could land at breakfast.
+pub const DEFAULT_CRON_GRACE_SECS: u64 = 15 * 60;
+
+/// A `When Event` node configured as a schedule rather than an event listener.
+///
+/// The selector lives in the node's config instead of in a separate `NodeKind` because everything
+/// downstream is identical: it is an entry point, it seeds a sub-run, and the graph reads the same
+/// either way. One entry-point concept in the catalog, two sources.
+pub struct CronConfig {
+    pub schedule: Schedule,
+    pub grace_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Extract the arm labels from a `StringSwitch` node's config. The "default" arm is
@@ -2672,7 +2742,7 @@ impl Graph {
         self.next_id += 1;
         self.nodes.push(GraphNode {
             id,
-            kind,
+            kind: kind.into(),
             x,
             y,
             config: kind.default_config(),
@@ -2752,11 +2822,29 @@ impl Graph {
         let tnode = self.node(to).ok_or("target node not found")?;
         let ft = fnode
             .output_port(from_port)
-            .ok_or_else(|| format!("{} has no output port '{from_port}'", fnode.kind.label()))?
+            .ok_or_else(|| {
+                format!(
+                    "{} has no output port '{from_port}'",
+                    fnode
+                        .kind
+                        .as_kind()
+                        .map(|k| k.label())
+                        .unwrap_or("unknown node")
+                )
+            })?
             .ty;
         let tt = tnode
             .input_port(to_port)
-            .ok_or_else(|| format!("{} has no input port '{to_port}'", tnode.kind.label()))?
+            .ok_or_else(|| {
+                format!(
+                    "{} has no input port '{to_port}'",
+                    tnode
+                        .kind
+                        .as_kind()
+                        .map(|k| k.label())
+                        .unwrap_or("unknown node")
+                )
+            })?
             .ty;
         if !Self::compatible(&ft, &tt) {
             return Err(format!("type mismatch: {ft:?} → {tt:?}"));

@@ -24,6 +24,8 @@ use app_core::workflows::{
 use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
 use crate::{store, AppState};
+use app_core::workflows::domain::AsKind;
+use app_core::workflows::domain::NodeExt;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -692,7 +694,7 @@ async fn instance_values(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| n.kind.label().to_string())
+                        .unwrap_or_else(|| n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node").to_string())
                 });
                 json!({ "node_id": nid, "label": label, "values": Value::Object(values) })
             })

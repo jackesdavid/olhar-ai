@@ -19,6 +19,7 @@ use app_core::workflows::domain::TriggerSource;
 use app_core::workflows::schedule::next_occurrence;
 
 use crate::state::{self, AppState};
+use app_core::workflows::domain::NodeExt;
 
 pub const SCHEDULE_CATEGORY: &str = "workflow_schedule";
 pub const SCHEDULE_KIND: &str = "fire";

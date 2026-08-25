@@ -13,9 +13,23 @@ use super::repo;
 use crate::agent::tools::{ToolContext, ToolUiEvent};
 
 use crate::workflows::domain::types;
+use crate::workflows::domain::AsKind;
 use base64::Engine as _;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+
+/// This product's kind for a stored node, or a failure that names it.
+///
+/// A document can name a kind this build does not register — an older graph meeting a newer
+/// deploy, or the reverse. [`validate`](ggraph_core::validate) exists to find those before a run
+/// starts; reaching one during a run is worth reporting rather than skipping, because a skipped
+/// node is a branch that quietly did nothing.
+fn kind_of(n: &crate::workflows::domain::GraphNode) -> Result<NodeKind, String> {
+    n.kind
+        .as_kind()
+        .ok_or_else(|| format!("node {}: no such kind {:?}", n.id, n.kind.as_str()))
+}
+use crate::workflows::domain::NodeExt;
 
 /// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
 /// loop (an exec cycle / event storm). Far above any real acyclic graph, so it
@@ -249,7 +263,10 @@ fn run_driver(
     if entry_payload.contains_key(WINDOW_STOP_MARKER) {
         let instance_key = graph.instance_scope.key_for(entry_payload);
         for nid in initial_forced {
-            if graph.node(*nid).map(|n| n.kind) != Some(NodeKind::DelayTrigger) {
+            if graph
+                .node(*nid)
+                .is_none_or(|n| n.kind != NodeKind::DelayTrigger)
+            {
                 continue;
             }
             let Some(stored) =
@@ -529,7 +546,7 @@ fn forward_epoch(
             forced.contains(&nid)
         } else if forced.contains(&nid) {
             true
-        } else if n.kind.is_pure_source() {
+        } else if n.kind.as_kind().is_some_and(|k| k.is_pure_source()) {
             // Pure sources re-evaluate every epoch (no exec propagation): a `GetVariable` consumer
             // sees the value as of when it runs — after any upstream `Set` — rather than a stale
             // epoch-0 read. Cheap; never extends the run.
@@ -591,9 +608,9 @@ fn forward_epoch(
                 // the wires — a Set wired earlier in the flow is seen — instead of node ids.
                 let pure_now = graph
                     .node(edge.from)
-                    .filter(|u| u.kind.is_pure_source())
+                    .filter(|u| u.kind.as_kind().is_some_and(|k| k.is_pure_source()))
                     .and_then(|u| {
-                        node::run_node(u.kind, &u.config, &PortValues::new(), sys)
+                        node::run_node(kind_of(u).ok()?, &u.config, &PortValues::new(), sys)
                             .ok()
                             .and_then(|mut o| o.remove(edge.from_port.as_str()))
                     });
@@ -702,7 +719,11 @@ fn forward_epoch(
             }
             *steps += 1;
             if graph.debug {
-                on_log(nid, &node::debug_summary(n.kind, &n.config, &inputs, &o), 0);
+                on_log(
+                    nid,
+                    &node::debug_summary(kind_of(n)?, &n.config, &inputs, &o),
+                    0,
+                );
             }
             outputs.insert(nid, o);
             ran.insert(nid);
@@ -1290,16 +1311,24 @@ fn forward_epoch(
         let started = Instant::now();
         // IO-bound kinds run under a per-node deadline (watchdog thread) so a stuck call
         // aborts the run instead of hanging forever; pure/instant kinds run inline.
-        let mut o = match node::node_timeout(n.kind, &n.config) {
-            Some(deadline) => node::run_node_timed(n.kind, &n.config, &inputs, sys, deadline),
-            None => node::run_node(n.kind, &n.config, &inputs, sys),
+        let mut o = match node::node_timeout(kind_of(n)?, &n.config) {
+            Some(deadline) => node::run_node_timed(kind_of(n)?, &n.config, &inputs, sys, deadline),
+            None => node::run_node(kind_of(n)?, &n.config, &inputs, sys),
         }
-        .map_err(|e| format!("{}: {e}", n.kind.label()))?;
+        .map_err(|e| {
+            format!(
+                "{}: {e}",
+                n.kind
+                    .as_kind()
+                    .map(|k| k.label())
+                    .unwrap_or("unknown node")
+            )
+        })?;
         let elapsed_ms = started.elapsed().as_millis();
         *steps += 1;
 
         if graph.debug {
-            let summary = node::debug_summary(n.kind, &n.config, &inputs, &o);
+            let summary = node::debug_summary(kind_of(n)?, &n.config, &inputs, &o);
             // A pure `GetVariable` activates every run/epoch even when the branch it feeds is never
             // reached (#115). Defer its emit rather than logging here — `run_driver` flushes it only
             // if a node it feeds actually ran. Buffer once per node id, in activation order; other
@@ -1349,7 +1378,7 @@ fn forward_epoch(
 
         // Display live sinks (Text/Gauge): resolve the `value` input (wired, or the config literal
         // fallback), persist it (survives refresh / flow restart), and push it live to the editor.
-        if matches!(n.kind, NodeKind::Text | NodeKind::Gauge) {
+        if n.kind == NodeKind::Text || n.kind == NodeKind::Gauge {
             let value = match inputs.get("value") {
                 Some(PortValue::Text(s)) => serde_json::json!(s),
                 Some(PortValue::Num(v)) => serde_json::json!(v),
@@ -1368,7 +1397,7 @@ fn forward_epoch(
                 let _ = sys.ui_tx.send(ToolUiEvent::ShowValue {
                     graph: graph.id,
                     node: nid,
-                    kind: n.kind.slug().to_string(),
+                    kind: n.kind.as_str().to_string(),
                     value,
                 });
             }
@@ -1397,7 +1426,7 @@ fn forward_epoch(
         // One rule, two schedulers. `node::arms_for` is what the engine's `NodeRoute` calls
         // too, and the differential test fails the moment they disagree — which is the only way
         // to keep an editor from drawing a live edge the run never takes.
-        for arm in node::arms_for(n.kind, &n.config, &inputs, &o) {
+        for arm in node::arms_for(kind_of(n)?, &n.config, &inputs, &o) {
             on_arm(nid, &arm);
             live_out.insert((nid, arm));
         }

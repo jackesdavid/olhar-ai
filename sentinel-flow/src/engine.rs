@@ -23,6 +23,7 @@ use app_core::workflows::{
 
 use crate::events;
 use crate::state::{self, Activity, AppState, GraphActivity, WF_GLOBAL_CAP};
+use app_core::workflows::domain::AsKind;
 
 /// Total in-flight runs across every tenant/graph — cron, manual **and** event handlers.
 ///
@@ -261,9 +262,9 @@ fn execute_run(
     let graph_id = graph.id;
     let debug = graph.debug;
     let labels: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.label())).collect();
+        graph.nodes.iter().map(|n| (n.id, n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node"))).collect();
     let slugs: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.slug())).collect();
+        graph.nodes.iter().map(|n| (n.id, n.kind.as_str())).collect();
     let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
 
     let prog = Arc::clone(state);

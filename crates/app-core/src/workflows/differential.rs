@@ -107,7 +107,7 @@ fn to_engine_graph(g: &Graph) -> ggraph_core::Graph<SentinelMeta> {
         .iter()
         .map(|n| ggraph_core::GraphNode {
             id: n.id,
-            kind: ggraph_core::NodeId::new(n.kind.slug()),
+            kind: ggraph_core::NodeId::new(n.kind.as_str()),
             x: n.x,
             y: n.y,
             config: n.config.clone(),
