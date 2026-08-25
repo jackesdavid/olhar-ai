@@ -19,7 +19,9 @@
 use super::domain::{self, NodeKind};
 use super::host::SentinelHost;
 use super::node;
-use ggraph_core::spec::{ExecOut, NodeCx, NodeError, NodeRun, NodeSpec, Ports, Purity, Timeout};
+use ggraph_core::spec::{
+    ExecOut, NodeCx, NodeError, NodeRoute, NodeRun, NodeSpec, Ports, Purity, Timeout,
+};
 use ggraph_core::{NodeRegistry, PortValues};
 use serde_json::Value as Json;
 use std::sync::OnceLock;
@@ -49,6 +51,17 @@ fn build() -> NodeRegistry<SentinelHost> {
 /// are, in `node/*.rs`, until the scheduler swap makes it worth moving them — at which point
 /// each becomes a `NodeRun` in its own file and this adapter disappears.
 struct Legacy(NodeKind);
+
+impl NodeRoute<SentinelHost> for Legacy {
+    fn arms(&self, cx: &NodeCx<'_, SentinelHost>, out: &PortValues) -> Vec<ggraph_core::PortName> {
+        let inputs = super::compat::from_engine_values(cx.inputs);
+        let outputs = super::compat::from_engine_values(out);
+        node::arms_for(self.0, cx.config, &inputs, &outputs)
+            .into_iter()
+            .map(ggraph_core::PortName::new)
+            .collect()
+    }
+}
 
 impl NodeRun<SentinelHost> for Legacy {
     fn run(&self, cx: &NodeCx<'_, SentinelHost>) -> Result<PortValues, NodeError> {
@@ -81,7 +94,8 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
         NodeSpec::pure(k.slug(), k.label(), k.category())
     };
 
-    base.with_purity(purity)
+    let declared = base
+        .with_purity(purity)
         .with_inputs(Ports::dynamic(move |cfg: &Json| {
             domain::resolved_input_ports(k, cfg)
         }))
@@ -91,8 +105,17 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
         .with_exec_out(exec_out_for(k, purity))
         .with_config(move || k.default_config())
         .with_timeout(timeout_for(k))
-        .with_aliases(aliases_for(k))
-        .running(Legacy(k))
+        .with_aliases(aliases_for(k));
+
+    // A routing kind CHOOSES an arm; everything else fires the arms it declares. Registering
+    // them all as `Run` was the first thing the differential test caught — a Run node fires
+    // every declared arm, so `if` fired `true` and `false` together and the engine ran both
+    // branches of every graph.
+    if node::is_routing(k) {
+        declared.routing(Legacy(k))
+    } else {
+        declared.running(Legacy(k))
+    }
 }
 
 fn exec_out_for(k: NodeKind, purity: Purity) -> ExecOut {
@@ -198,9 +221,34 @@ mod tests {
     fn every_kind_has_an_executable_behaviour() {
         let inert: Vec<&str> = registry()
             .all()
-            .filter(|s| !matches!(s.behavior, Behavior::Run(_)))
+            .filter(|s| matches!(s.behavior, Behavior::Inert))
             .map(|s| s.id.as_str())
             .collect();
         assert!(inert.is_empty(), "no behaviour registered for {inert:?}");
+    }
+
+    /// A node that CHOOSES an arm is registered as one, and everything else is not.
+    ///
+    /// The distinction is not decorative: a `Run` node fires every exec arm it declares, so an
+    /// `if` registered as `Run` fires `true` and `false` together — which is what happened, and
+    /// what the differential test caught.
+    #[test]
+    fn the_kinds_that_choose_an_arm_are_registered_as_routing() {
+        let routing: Vec<&str> = registry()
+            .all()
+            .filter(|s| matches!(s.behavior, Behavior::Route(_)))
+            .map(|s| s.id.as_str())
+            .collect();
+        let mut expected = vec![
+            "if",
+            "ask_ai",
+            "string_switch",
+            "ai_switch",
+            "camera_switch",
+        ];
+        let mut got = routing.clone();
+        expected.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(got, expected, "the routing set drifted");
     }
 }

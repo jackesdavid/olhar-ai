@@ -275,7 +275,11 @@ struct Inner {
     tools: ToolContext,
     state: PgState,
     io: MediaIo,
-    observer: UiObserver,
+    /// Boxed rather than the concrete [`UiObserver`], so a caller can watch a run without the
+    /// editor being involved. The differential test that compares this product's scheduler with
+    /// the engine's needs the node ORDER, and order only exists in the observer — the run's
+    /// return value is a map.
+    observer: Box<dyn Observer + Send + Sync>,
     not_routed: NotRouted,
     vars: Mutex<HashMap<String, Value>>,
 }
@@ -293,6 +297,22 @@ impl SentinelHost {
         };
         let observer = UiObserver {
             tx: tools.ui_tx.clone(),
+        };
+        SentinelHost(Arc::new(Inner {
+            state,
+            io: MediaIo,
+            observer: Box::new(observer),
+            not_routed: NotRouted,
+            vars: Mutex::new(HashMap::new()),
+            tools,
+        }))
+    }
+
+    /// The same host, reporting to `observer` instead of to the editor.
+    pub fn watching(tools: ToolContext, observer: Box<dyn Observer + Send + Sync>) -> Self {
+        let state = PgState {
+            db: tools.db.clone(),
+            tenant: tools.tenant_id,
         };
         SentinelHost(Arc::new(Inner {
             state,
@@ -327,7 +347,7 @@ impl Host for SentinelHost {
         &self.0.io
     }
     fn observer(&self) -> &dyn Observer {
-        &self.0.observer
+        self.0.observer.as_ref()
     }
     fn approvals(&self) -> &dyn Approvals {
         &self.0.not_routed
@@ -363,6 +383,28 @@ impl Host for SentinelHost {
                 .map(|s| SmolStr::new(s.trim()))
                 .unwrap_or_default(),
         }
+    }
+
+    fn literal(
+        &self,
+        kind: &ggraph_core::NodeId,
+        port: &ggraph_core::Port,
+        config: &Json,
+    ) -> Option<Value> {
+        // Two of these need `sys` and so cannot be a pure read of the config: a camera literal is
+        // a device id resolved against the device store, and a table literal is a dictionary id
+        // resolved against the run-start snapshot. That is exactly why this is a host method and
+        // not something the engine could work out on its own.
+        let name = port.name.as_str();
+        let v = if port.ty == super::domain::types::CAMERA {
+            super::node::resolve_camera_literal(config, name, &self.0.tools)
+        } else if port.ty == super::domain::types::TABLE {
+            super::node::resolve_table_literal(config, name, &self.0.tools)
+        } else {
+            super::node::literal_for_named(config, name, port.ty.clone())
+        };
+        let _ = kind;
+        v.as_ref().map(super::compat::to_engine)
     }
 
     fn schedule(&self, at_epoch_secs: i64, target: NodeTarget) -> Result<(), HostError> {

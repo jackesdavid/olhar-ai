@@ -20,6 +20,19 @@ kanban-plugin: board
 
 ## Bugs
 
+- [x] #206 Edge highlight follows the target node, not the arm that fired
+	  - Plan: [[edge-highlight-follows-the-target]]
+	  - `+page.svelte:3911` lights an edge when its TARGET is live, so with two branches
+	    converging on one node BOTH incoming edges animate. Reported on BotMessages.
+	  - The editor cannot fix it alone: `workflow-node` says a node ran and nothing has ever
+	    said HOW control reached it. Fix is `on_arm(node, port)` in the driver → a
+	    `workflow-arm` event → the editor lights an edge by its own (from, from_port).
+	  - Third bug in one family (#115, #205, #206): the editor inferring what the engine knew
+	    and did not publish. The scheduler is right in all three.
+	  - FIXED: `on_arm` in the driver → `workflow-arm` event → the editor lights an edge by its
+	    own (from, from_port). Test: both arms of an If wired to one node, only `false` is
+	    reported.
+
 - [x] #205 Pure sources activate on dead branches — the canvas is telling the truth
 	  - Plan: [[pure-sources-run-on-dead-branches]]
 	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
@@ -32,9 +45,13 @@ kanban-plugin: board
 	  - FIX: defer `on_node` for pure sources the same way `on_log` already is. Do NOT remove
 	    the activation: measured, that fails three tests including the #114/#115 one.
 	  - Oracle now exists in `workflows::golden` (the orphan-source-in-a-sub-run shape).
-	  - FIXED: a Get's `on_node` is held until a node that READS it runs, and emitted just
-	    before that node. A Get whose readers all sat out never pings. Proven by reverting the
-	    fix and watching the new test fail on the exact node id.
+	  - FIXED (!138, merged): a Get's `on_node` is held until a node that READS it runs, and
+	    emitted just before that node. Proven by reverting the fix and watching the new test
+	    fail on the exact node id. AGUARDA confirmação em produção — o deploy `e4c7b46` estava
+	    subindo quando a sessão foi salva; o repórter já confirmou que o bug reproduz no deploy
+	    anterior, que é a metade "antes" da comparação.
+	  - EM ABERTO: `GetCameraByName` e `GetRecipient` têm a mesma forma e continuam sem o
+	    adiamento, nos dois callbacks.
 
 - [ ] #148 Security §0 — rotate the exposed secrets (JWT_SECRET, Stripe pair, MASTER_PASSWORD)
 	  - Plan: [[security-hardening-remainder]]
@@ -166,8 +183,12 @@ kanban-plugin: board
 	    de agnosticismo no CI. Inclui o checkpoint durável, que era o maior risco da fase.
 	  - Achado que muda o plano: exec-stream e exec-durable NÃO são dois crates — é um
 	    scheduler e um enum de política. Ver a nota.
-	  - PRÓXIMO: Fase 2 no bishop — um nó por arquivo + registry, in place, uma família por MR,
-	    com o snapshot do catálogo byte-idêntico depois de cada uma.
+	  - Fase 2 FEITA e VERIFICADA em produção: portas tipadas, Edge, regra de compatibilidade e
+	    os 91 kinds num registry da engine. O catálogo passou a responder certo para os seis nós
+	    de config — era um bug antigo: o endpoint lia a tabela estática e o scheduler a dinâmica.
+	  - PRÓXIMO: `Graph<SentinelMeta>`, depois a troca do scheduler (19 blocos inline viram
+	    NodeStep). A troca precisa de um teste diferencial — mesmo grafo, dois schedulers,
+	    mesma sequência de nós — antes de ser segura.
 
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]
