@@ -27,23 +27,13 @@ use std::sync::{Arc, Mutex};
 
 /// Shapes that do not agree yet, and why. A shape listed here is skipped by the sweep rather
 /// than silently failing it — a red test nobody can fix is a red test everybody learns to ignore.
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "branch",
-        "the engine runs BOTH arms. Every kind is registered through the `Legacy` adapter as \
-         `Behavior::Run`, and a Run node fires all of its declared exec arms — so `if` fires \
-         `true` and `false` together. `if` is a Route: it has to CHOOSE. Fixed by giving the \
-         routing kinds (if, string_switch, ai_switch, camera_switch, device_gate) a real \
-         `NodeRoute` instead of the adapter.",
-    ),
-    (
-        "loop",
-        "the engine runs the body once; this product runs it once per item. `ForEach` is driven \
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[(
+    "loop",
+    "the engine runs the body once; this product runs it once per item. `ForEach` is driven \
          by the scheduler here — it is one of the 19 inline `n.kind ==` blocks — and the adapter \
          cannot drive it, because a Run node cannot ask to be re-entered. Fixed by giving the \
          cooperating kinds a real `NodeStep`.",
-    ),
-];
+)];
 
 /// Records the order nodes executed in, which is the only thing being compared.
 #[derive(Default)]

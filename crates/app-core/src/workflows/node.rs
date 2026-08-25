@@ -437,6 +437,96 @@ pub fn parse_variable_value(
     }
 }
 
+/// Which exec arm(s) a node fires.
+///
+/// Extracted from the scheduler so there is exactly one answer to "where does control go next".
+/// It has to be callable from two places now — this product's scheduler and the engine's
+/// `NodeRoute` — and two copies of a routing rule is how an editor starts drawing a live edge
+/// the run never takes.
+///
+/// `outputs` matters for the two kinds that decide by asking a model: the choice is computed
+/// during the run and left on an output port, so the arm cannot be worked out from the inputs
+/// alone.
+pub fn arms_for(
+    kind: NodeKind,
+    config: &Value,
+    inputs: &PortValues,
+    outputs: &PortValues,
+) -> Vec<String> {
+    let one = |s: &str| vec![s.to_string()];
+    match kind {
+        NodeKind::If => {
+            let cond = inputs
+                .get("condition")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            one(if cond { "true" } else { "false" })
+        }
+        NodeKind::AskAi => {
+            let answer = outputs
+                .get("result")
+                .and_then(PortValue::as_bool)
+                .unwrap_or(false);
+            one(if answer { "true" } else { "false" })
+        }
+        NodeKind::StringSwitch => {
+            let val = inputs
+                .get("value")
+                .and_then(PortValue::as_text)
+                .unwrap_or_default();
+            let arms = crate::workflows::domain::string_switch_arms(config);
+            if arms.iter().any(|a| a == val) {
+                one(val)
+            } else {
+                one("default")
+            }
+        }
+        NodeKind::AiSwitch => {
+            // The model's choice is validated against the configured arms before it is trusted:
+            // a model naming an arm that does not exist would otherwise fire nothing at all.
+            let arm = outputs
+                .get("arm")
+                .and_then(PortValue::as_text)
+                .unwrap_or("default");
+            let arms = crate::workflows::domain::string_switch_arms(config);
+            if arm != "default" && arms.iter().any(|a| a == arm) {
+                one(arm)
+            } else {
+                one("default")
+            }
+        }
+        NodeKind::CameraSwitch => {
+            let Some(cam) = inputs.get("camera").and_then(PortValue::as_camera) else {
+                return one("default");
+            };
+            let arms = crate::workflows::domain::camera_switch_arms(config);
+            arms.iter()
+                .position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id))
+                .map(|i| vec![format!("arm_{}", i + 1)])
+                .unwrap_or_else(|| one("default"))
+        }
+        // Everything else fires every arm it declares, which for almost every node is the single
+        // "and then" pin.
+        k => k
+            .exec_out_ports()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect(),
+    }
+}
+
+/// The kinds that CHOOSE an arm rather than firing all of them.
+pub fn is_routing(kind: NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::If
+            | NodeKind::AskAi
+            | NodeKind::StringSwitch
+            | NodeKind::AiSwitch
+            | NodeKind::CameraSwitch
+    )
+}
+
 /// Resolve a `Table` config literal (the dropdown-stored dictionary id) to a `PortValue::Table`,
 /// from the run-start dictionaries snapshot. Called by the engine when a `types::TABLE` input
 /// port has no wired edge — the counterpart to [`resolve_camera_literal`].

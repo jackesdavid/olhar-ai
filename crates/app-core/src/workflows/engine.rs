@@ -1372,60 +1372,11 @@ fn forward_epoch(
             o = node::seed_event_payload(entry_payload, &n.output_ports(), sys);
         }
 
-        if n.kind == NodeKind::If {
-            let cond = inputs
-                .get("condition")
-                .and_then(PortValue::as_bool)
-                .unwrap_or(false);
-            live_out.insert((nid, if cond { "true" } else { "false" }.to_string()));
-        } else if n.kind == NodeKind::AskAi {
-            // AskAi: run_node computed the answer and stored it in `o["result"]`.
-            let answer = o
-                .get("result")
-                .and_then(PortValue::as_bool)
-                .unwrap_or(false);
-            live_out.insert((nid, if answer { "true" } else { "false" }.to_string()));
-        } else if n.kind == NodeKind::StringSwitch {
-            let val = inputs
-                .get("value")
-                .and_then(PortValue::as_text)
-                .unwrap_or_default();
-            let arms = string_switch_arms(&n.config);
-            if arms.iter().any(|a| a == val) {
-                live_out.insert((nid, val.to_string()));
-            } else {
-                live_out.insert((nid, "default".to_string()));
-            }
-        } else if n.kind == NodeKind::AiSwitch {
-            // run_node classified the message and stored the chosen arm in o["arm"]. Validate it
-            // against the configured arms (defence) and fire it, else the "default" branch.
-            let arm = o
-                .get("arm")
-                .and_then(PortValue::as_text)
-                .unwrap_or("default");
-            let arms = string_switch_arms(&n.config);
-            if arm != "default" && arms.iter().any(|a| a == arm) {
-                live_out.insert((nid, arm.to_string()));
-            } else {
-                live_out.insert((nid, "default".to_string()));
-            }
-        } else if n.kind == NodeKind::CameraSwitch {
-            let cam = inputs.get("camera").and_then(PortValue::as_camera);
-            let port = if let Some(cam) = cam {
-                let arms = camera_switch_arms(&n.config);
-                let idx = arms
-                    .iter()
-                    .position(|a| !a.is_empty() && (a == &cam.ip || a == &cam.id));
-                idx.map(|i| format!("arm_{}", i + 1))
-                    .unwrap_or_else(|| "default".to_string())
-            } else {
-                "default".to_string()
-            };
-            live_out.insert((nid, port));
-        } else {
-            for p in n.kind.exec_out_ports() {
-                live_out.insert((nid, p.name.to_string()));
-            }
+        // One rule, two schedulers. `node::arms_for` is what the engine's `NodeRoute` calls
+        // too, and the differential test fails the moment they disagree — which is the only way
+        // to keep an editor from drawing a live edge the run never takes.
+        for arm in node::arms_for(n.kind, &n.config, &inputs, &o) {
+            live_out.insert((nid, arm));
         }
         outputs.insert(nid, o);
         ran.insert(nid);
