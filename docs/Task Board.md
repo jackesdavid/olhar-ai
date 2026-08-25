@@ -20,6 +20,16 @@ kanban-plugin: board
 
 ## Bugs
 
+- [ ] #206 Edge highlight follows the target node, not the arm that fired
+	  - Plan: [[edge-highlight-follows-the-target]]
+	  - `+page.svelte:3911` lights an edge when its TARGET is live, so with two branches
+	    converging on one node BOTH incoming edges animate. Reported on BotMessages.
+	  - The editor cannot fix it alone: `workflow-node` says a node ran and nothing has ever
+	    said HOW control reached it. Fix is `on_arm(node, port)` in the driver → a
+	    `workflow-arm` event → the editor lights an edge by its own (from, from_port).
+	  - Third bug in one family (#115, #205, #206): the editor inferring what the engine knew
+	    and did not publish. The scheduler is right in all three.
+
 - [x] #205 Pure sources activate on dead branches — the canvas is telling the truth
 	  - Plan: [[pure-sources-run-on-dead-branches]]
 	  - `engine.rs:499` activates any `is_pure_source` kind unconditionally, so Get Variable /
