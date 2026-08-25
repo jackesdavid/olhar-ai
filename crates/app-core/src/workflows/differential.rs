@@ -16,13 +16,12 @@
 //! they are understood; [`KNOWN_DIFFERENCES`] lists the ones that do not agree yet and why,
 //! rather than letting them sit as a quietly ignored failure.
 
-use super::domain::{Graph, NodeKind};
+use super::domain::Graph;
 use super::host::{SentinelHost, SentinelMeta};
 use super::node::PortValues;
 use crate::agent::tools::ToolContext;
 use ggraph_core::host::{Observer, UiEvent};
 use ggraph_core::{Entry, RunOptions};
-use serde_json::json;
 use std::sync::{Arc, Mutex};
 
 /// Shapes that do not agree yet, and why. A shape listed here is skipped by the sweep rather
@@ -120,7 +119,9 @@ fn to_engine_graph(g: &Graph) -> ggraph_core::Graph<SentinelMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflows::domain::NodeKind;
     use crate::workflows::golden::test_ctx;
+    use serde_json::json;
 
     /// Compare one shape, and report a difference the way a person needs to read it.
     fn agree(name: &str, g: &Graph) {

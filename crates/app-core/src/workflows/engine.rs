@@ -7,10 +7,7 @@
 //! resolving inputs from upstream outputs else config literals), stopping on the
 //! first node error. The trigger/concurrency methods are the pure decision logic
 //! the backend poller drives.
-use super::domain::{
-    camera_switch_arms, string_switch_arms, ConcurrencyPolicy, Graph, NodeKind, EXEC_IN,
-    WINDOW_STOP_MARKER,
-};
+use super::domain::{ConcurrencyPolicy, Graph, NodeKind, EXEC_IN, WINDOW_STOP_MARKER};
 use super::node::{self, PortValue, PortValues};
 use super::repo;
 use crate::agent::tools::{ToolContext, ToolUiEvent};
