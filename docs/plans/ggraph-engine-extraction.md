@@ -659,9 +659,9 @@ concordância medida, e o que falta é uma lista com dificuldade real em vez de 
 
 | kind | linhas inline | o que torna difícil |
 |---|---|---|
-| `EmitEvent` | 10 | **medido**: o callback chama `fire_event` com o estado do `sentinel-flow`, que NÃO está no `ToolContext`. Não é conversão, é mudança estrutural — precisa de um `Arc<dyn EventEmitter>` no contexto, populado pelo flow, do mesmo jeito que `ui_tx` já está. Aí o nó alcança direto e nenhum trait da engine aprende o que é um evento deste produto. |
+| ~~`EmitEvent`~~ | ~~10~~ | **feito** (`steps/emit_event.rs`) — e a mudança estrutural que ele exigia valeu: `EventEmitter` é um trait no `ToolContext`, populado pelo flow, do jeito que `ui_tx` já era. O nó alcança direto e nenhum trait da engine aprendeu o que é um evento aqui. Contexto sem barramento deixa `None` e o nó **diz** que não disparou, em vez de reportar um disparo que não chegou a ninguém. |
 | ~~`Gauge`/`Text`~~ | ~~24~~ | **feito** (`steps/display.rs`) — e a lição está lá: o nó alcança `ui_tx` pelo `tools()`, direto. O `UiEvent` da engine tem duas variantes e teria de crescer uma por produto para carregar um `ShowValue`, que é exatamente o acoplamento que a extração existe para evitar. |
-| `ShowImage` | 32 | mesma forma do display, mais bytes de imagem |
+| ~~`ShowImage`~~ | ~~32~~ | **feito** (`steps/show_image.rs`) |
 | `OnEvent` | 44 | semeadura de entrada; é o gatilho, não um nó comum |
 | `DelayTrigger` | 132 | janela durável com aresta de descida |
 | `DeviceGate` | 195 | aprovação humana; suspende o run e retoma noutro |
