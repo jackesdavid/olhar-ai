@@ -26,6 +26,7 @@ use crate::auth::{self, UserClaims};
 use crate::{store, AppState};
 use app_core::workflows::domain::AsKind;
 use app_core::workflows::domain::NodeExt;
+use app_core::workflows::domain::GraphExt;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -193,7 +194,7 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
     use std::collections::BTreeMap;
 
     let mut jobs: BTreeMap<(String, String), JobAcc> = BTreeMap::new();
-    for g in graphs.iter().filter(|g| g.enabled) {
+    for g in graphs.iter().filter(|g| g.meta.enabled) {
         for n in &g.nodes {
             if n.kind != WfNodeKind::OnEvent {
                 continue;
@@ -237,7 +238,7 @@ async fn sync_tracking_config(st: &AppState, tid: Uuid, graphs: &[WfGraph]) {
             acc.low_thresh = config_num(&n.config, "low_thresh")
                 .map(|v| v as f32)
                 .unwrap_or(DEFAULT_LOW_THRESH);
-            acc.debug = g.debug;
+            acc.debug = g.meta.debug;
             let Some((name, points)) = g.resolve_region(n) else {
                 continue;
             }; // no region wired — whole-frame
@@ -356,10 +357,10 @@ async fn list(
             .filter(|g| {
                 let hit = q.as_ref().map_or(true, |q| {
                     g.name.to_lowercase().contains(q)
-                        || g.description.to_lowercase().contains(q)
-                        || g.group.to_lowercase().contains(q)
+                        || g.meta.description.to_lowercase().contains(q)
+                        || g.meta.group.to_lowercase().contains(q)
                 });
-                let in_group = group.map_or(true, |grp| g.group == grp);
+                let in_group = group.map_or(true, |grp| g.meta.group == grp);
                 hit && in_group
             })
             .map(|g| {
@@ -569,7 +570,7 @@ async fn cron_next(
             .iter()
             .filter_map(|n| {
                 let cron = n.cron()?;
-                let next = if g.enabled {
+                let next = if g.meta.enabled {
                     app_core::workflows::schedule::next_occurrence(&cron.schedule, now)
                         .map(|t| t.to_rfc3339())
                 } else {
@@ -578,7 +579,7 @@ async fn cron_next(
                 Some(serde_json::json!({ "node": n.id, "next_fire_at": next }))
             })
             .collect();
-        serde_json::json!({ "enabled": g.enabled, "nodes": nodes })
+        serde_json::json!({ "enabled": g.meta.enabled, "nodes": nodes })
     })
     .await?;
     Ok(Json(out))
@@ -977,7 +978,7 @@ async fn set_description(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.description = b.value.trim().to_string();
+        wf.graph_mut(id).ok_or("graph not found")?.meta.description = b.value.trim().to_string();
         Ok(())
     })
     .await?;
@@ -993,7 +994,7 @@ async fn set_group(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.group = b.value.trim().to_string();
+        wf.graph_mut(id).ok_or("graph not found")?.meta.group = b.value.trim().to_string();
         Ok(())
     })
     .await?;
@@ -1013,7 +1014,7 @@ async fn duplicate(
         let mut copy = wf.graph(id).ok_or("graph not found")?.clone();
         copy.id = uuid::Uuid::new_v4();
         copy.name = format!("{} (copy)", copy.name);
-        copy.enabled = false;
+        copy.meta.enabled = false;
         let new_id = copy.id;
         wf.graphs.push(copy);
         Ok(new_id)
@@ -1039,9 +1040,9 @@ fn to_summary(g: &WfGraph) -> TemplateSummary {
     TemplateSummary {
         id: g.id,
         name: g.name.clone(),
-        description: g.description.clone(),
-        global: g.global,
-        inputs: g.variables.iter().filter(|v| v.param).cloned().collect(),
+        description: g.meta.description.clone(),
+        global: g.meta.global,
+        inputs: g.meta.variables.iter().filter(|v| v.param).cloned().collect(),
     }
 }
 
@@ -1061,7 +1062,7 @@ async fn list_templates(
         // global by id in practice, but de-dup keeps the list clean).
         for g in workflows::repo::load(&db, tid)
             .iter()
-            .filter(|g| g.template)
+            .filter(|g| g.meta.template)
         {
             if seen.insert(g.id) {
                 out.push(to_summary(g));
@@ -1095,7 +1096,7 @@ async fn use_template(
     let source = blocking(move || {
         if let Some(g) = workflows::repo::load(&db, tid)
             .into_iter()
-            .find(|g| g.id == id && g.template)
+            .find(|g| g.id == id && g.meta.template)
         {
             return Ok(g);
         }
@@ -1111,9 +1112,9 @@ async fn use_template(
     let new_id = mutate(&st, tid, move |wf| {
         let mut copy = source;
         copy.id = uuid::Uuid::new_v4();
-        copy.enabled = false;
-        copy.template = false;
-        copy.global = false;
+        copy.meta.enabled = false;
+        copy.meta.template = false;
+        copy.meta.global = false;
         let new_id = copy.id;
         wf.graphs.push(copy);
         Ok(new_id)
@@ -1133,10 +1134,10 @@ async fn set_template(
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
         let g = wf.graph_mut(id).ok_or("graph not found")?;
-        g.template = b.value;
+        g.meta.template = b.value;
         // Unmarking a template can't leave it globally published.
         if !b.value {
-            g.global = false;
+            g.meta.global = false;
         }
         Ok(())
     })
@@ -1163,9 +1164,9 @@ async fn set_global(
         let g = wf.graph_mut(id).ok_or("graph not found")?;
         // A global template is still a template.
         if b.value {
-            g.template = true;
+            g.meta.template = true;
         }
-        g.global = b.value;
+        g.meta.global = b.value;
         Ok(())
     })
     .await?;
@@ -1216,7 +1217,7 @@ async fn set_concurrency(
             },
             other => return Err(format!("unknown concurrency kind '{other}'")),
         };
-        wf.graph_mut(id).ok_or("graph not found")?.concurrency = policy;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.concurrency = policy;
         Ok(())
     })
     .await?;
@@ -1245,7 +1246,7 @@ async fn set_instance_scope(
             "per_camera" => InstanceScope::PerCamera,
             other => return Err(format!("unknown instance scope '{other}'")),
         };
-        wf.graph_mut(id).ok_or("graph not found")?.instance_scope = scope;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.instance_scope = scope;
         Ok(())
     })
     .await?;
@@ -1270,7 +1271,7 @@ async fn set_variables(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.variables = b;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.variables = b;
         Ok(())
     })
     .await?;
@@ -1286,7 +1287,7 @@ async fn set_viewport(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.viewport = Viewport {
+        wf.graph_mut(id).ok_or("graph not found")?.meta.viewport = Viewport {
             x: b.x,
             y: b.y,
             zoom: b.zoom,
@@ -1308,7 +1309,7 @@ async fn set_edge_vias(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.edge_vias = b;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.edge_vias = b;
         Ok(())
     })
     .await?;
@@ -1329,7 +1330,7 @@ async fn set_enabled(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.enabled = b.value;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.enabled = b.value;
         Ok(())
     })
     .await?;
@@ -1345,7 +1346,7 @@ async fn set_run_orphans(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.run_orphans = b.value;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.run_orphans = b.value;
         Ok(())
     })
     .await?;
@@ -1361,7 +1362,7 @@ async fn set_debug(
     auth::require(&c, "workflows.write")?;
     let tid = tenant_of(&c)?;
     mutate(&st, tid, move |wf| {
-        wf.graph_mut(id).ok_or("graph not found")?.debug = b.value;
+        wf.graph_mut(id).ok_or("graph not found")?.meta.debug = b.value;
         Ok(())
     })
     .await?;
@@ -1483,10 +1484,10 @@ async fn save_graph(
         g.nodes = body.nodes;
         g.edges = body.edges;
         if let Some(vp) = body.viewport {
-            g.viewport = vp;
+            g.meta.viewport = vp;
         }
         if let Some(vias) = body.edge_vias {
-            g.edge_vias = vias;
+            g.meta.edge_vias = vias;
         }
         if let Some(n) = body.next_id {
             g.next_id = n;
@@ -1517,7 +1518,7 @@ async fn add_edge(
     mutate(&st, tid, move |wf| {
         wf.graph_mut(id)
             .ok_or("graph not found")?
-            .add_edge(b.from, &b.from_port, b.to, &b.to_port)
+            .wire(b.from, &b.from_port, b.to, &b.to_port)
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

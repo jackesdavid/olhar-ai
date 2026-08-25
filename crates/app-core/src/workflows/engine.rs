@@ -29,6 +29,7 @@ fn kind_of(n: &crate::workflows::domain::GraphNode) -> Result<NodeKind, String> 
         .as_kind()
         .ok_or_else(|| format!("node {}: no such kind {:?}", n.id, n.kind.as_str()))
 }
+use crate::workflows::domain::GraphExt;
 use crate::workflows::domain::NodeExt;
 
 /// Hard ceiling on node EXECUTIONS in a single run — the backstop against an infinite
@@ -225,7 +226,7 @@ fn run_driver(
     on_log: &mut dyn FnMut(u32, &str, u128),
     emit: &mut dyn FnMut(&str, &PortValues),
 ) -> Result<HashMap<u32, PortValues>, String> {
-    let connected: HashSet<u32> = if graph.run_orphans {
+    let connected: HashSet<u32> = if graph.meta.run_orphans {
         graph.nodes.iter().map(|n| n.id).collect()
     } else {
         graph.edges.iter().flat_map(|e| [e.from, e.to]).collect()
@@ -261,7 +262,7 @@ fn run_driver(
     // camera's variables can't surface in another's stop. Done here rather than per-epoch so it
     // can't clobber a Set that ran in an earlier epoch.
     if entry_payload.contains_key(WINDOW_STOP_MARKER) {
-        let instance_key = graph.instance_scope.key_for(entry_payload);
+        let instance_key = graph.meta.instance_scope.key_for(entry_payload);
         for nid in initial_forced {
             if graph
                 .node(*nid)
@@ -377,7 +378,7 @@ fn run_driver(
     // re-run `StartRecording` (only `start` lights it, and a re-trigger lights nothing), so the
     // arming run's `clip_id` survives untouched while the camera refreshes. Write everything in
     // `outputs` instead and a stop run would immediately overwrite the values it had just resumed.
-    let instance_key = graph.instance_scope.key_for(entry_payload);
+    let instance_key = graph.meta.instance_scope.key_for(entry_payload);
     for nid in &ran {
         let Some(produced) = outputs.get(nid) else {
             continue;
@@ -461,7 +462,7 @@ fn forward_epoch(
     // It scopes ALL latent node state, not just the DelayTrigger's window: a Cooldown or Time Gate
     // in a per-camera graph is per-camera too. Scoping only one node kind would be the fork this
     // model exists to remove.
-    let instance_key = graph.instance_scope.key_for(entry_payload);
+    let instance_key = graph.meta.instance_scope.key_for(entry_payload);
 
     // A window-stop run RESUMES its instance: it's fired by a timer and carries none of the event's
     // data, so without the instance's stored values `StopRecording.camera` (from OnEvent) and
@@ -718,7 +719,7 @@ fn forward_epoch(
                 loop_state.remove(&nid);
             }
             *steps += 1;
-            if graph.debug {
+            if graph.meta.debug {
                 on_log(
                     nid,
                     &node::debug_summary(kind_of(n)?, &n.config, &inputs, &o),
@@ -753,7 +754,7 @@ fn forward_epoch(
             let mut o = PortValues::new();
             o.insert("is_a".into(), PortValue::Bool(is_a));
             *steps += 1;
-            if graph.debug {
+            if graph.meta.debug {
                 on_log(
                     nid,
                     &format!("Flip Flop → {}", if is_a { "a" } else { "b" }),
@@ -806,7 +807,7 @@ fn forward_epoch(
             o.insert("elapsed_secs".into(), PortValue::Num(elapsed_secs as i64));
             o.insert("ok".into(), PortValue::Bool(ok));
             *steps += 1;
-            if graph.debug {
+            if graph.meta.debug {
                 on_log(
                     nid,
                     &format!(
@@ -885,14 +886,14 @@ fn forward_epoch(
                                 .to_rfc3339(),
                         }),
                     );
-                    if graph.debug {
+                    if graph.meta.debug {
                         on_log(
                             nid,
                             &format!("Time Gate: extended +{}s", extend_secs - remaining),
                             0,
                         );
                     }
-                } else if graph.debug {
+                } else if graph.meta.debug {
                     on_log(
                         nid,
                         &format!("Time Gate: re-trigger, {remaining}s remaining (no extend)"),
@@ -923,7 +924,7 @@ fn forward_epoch(
                 }),
             );
             sys.active_gates.lock().unwrap().insert(gate_key);
-            if graph.debug {
+            if graph.meta.debug {
                 if is_armed {
                     on_log(
                         nid,
@@ -970,10 +971,10 @@ fn forward_epoch(
             );
             if fired {
                 live_out.insert((nid, "out".to_string()));
-                if graph.debug {
+                if graph.meta.debug {
                     on_log(nid, "Time Gate: countdown expired → out", 0);
                 }
-            } else if graph.debug {
+            } else if graph.meta.debug {
                 on_log(nid, "Time Gate: reset → no output", 0);
             }
             *steps += 1;
@@ -1014,7 +1015,7 @@ fn forward_epoch(
             // node too, and that must not be mistaken for an expired window.
             if forced.contains(&nid) && entry_payload.contains_key(WINDOW_STOP_MARKER) {
                 live_out.insert((nid, "stop".to_string()));
-                if graph.debug {
+                if graph.meta.debug {
                     on_log(nid, "Delay Trigger: window closed → stop", 0);
                 }
                 *steps += 1;
@@ -1050,7 +1051,7 @@ fn forward_epoch(
                     &instance_key,
                     &expires_at,
                 );
-                if graph.debug {
+                if graph.meta.debug {
                     on_log(
                         nid,
                         &format!("Delay Trigger: armed for {wait_secs}s → start"),
@@ -1079,14 +1080,14 @@ fn forward_epoch(
                         &instance_key,
                         &rfc(now_ts + extend_secs),
                     );
-                    if graph.debug {
+                    if graph.meta.debug {
                         on_log(
                             nid,
                             &format!("Delay Trigger: extended +{}s", extend_secs - remaining),
                             0,
                         );
                     }
-                } else if graph.debug {
+                } else if graph.meta.debug {
                     on_log(
                         nid,
                         &format!("Delay Trigger: re-trigger, {remaining}s remaining (no extend)"),
@@ -1327,7 +1328,7 @@ fn forward_epoch(
         let elapsed_ms = started.elapsed().as_millis();
         *steps += 1;
 
-        if graph.debug {
+        if graph.meta.debug {
             let summary = node::debug_summary(kind_of(n)?, &n.config, &inputs, &o);
             // A pure `GetVariable` activates every run/epoch even when the branch it feeds is never
             // reached (#115). Defer its emit rather than logging here — `run_driver` flushes it only
@@ -1662,15 +1663,21 @@ mod tests {
         );
 
         let mut g = Graph::new("g");
-        let entry = g.add_node(NodeKind::OnEvent, 0, 0);
+        let entry = g.add(NodeKind::OnEvent, 0, 0);
         g.node_mut(entry).unwrap().config["event"] = json!("motion");
         // The orphan: no incoming edges at all — its value comes purely from config.
-        let src = g.add_node(NodeKind::GetCameraByName, 0, 0);
+        let src = g.add(NodeKind::GetCameraByName, 0, 0);
         g.node_mut(src).unwrap().config["camera"] = json!("Hall");
-        // A consumer whose `camera` input is REQUIRED and wired to that orphan.
-        let sink = g.add_node(NodeKind::BreakCamera, 0, 0);
-        g.add_edge(src, "camera", sink, "camera").unwrap();
-        g.add_edge(entry, "exec_out", sink, "exec_in").unwrap();
+        // A consumer whose `camera` input is REQUIRED and wired to that orphan. `BreakCamera`
+        // is PURE, so it has no exec pins and is reached by being READ — which is why a reader
+        // hangs off it below. The earlier version of this test wired exec straight into it, a
+        // wire the editor cannot draw (the pin does not exist in the catalog) and that only
+        // worked because the old `add_edge` was more permissive than the palette.
+        let sink = g.add(NodeKind::BreakCamera, 0, 0);
+        g.wire(src, "camera", sink, "camera").unwrap();
+        let reader = g.add(NodeKind::Print, 0, 0);
+        g.wire(entry, "exec_out", reader, "exec_in").unwrap();
+        g.wire(sink, "name", reader, "message").unwrap();
 
         let outs = run_subpath_eventful(
             &g,
@@ -1699,12 +1706,12 @@ mod tests {
         for (cond, want, skip) in [(true, "a", "b"), (false, "b", "a")] {
             let ctx = test_ctx();
             let mut g = Graph::new("g");
-            let gate = g.add_node(NodeKind::If, 0, 0);
+            let gate = g.add(NodeKind::If, 0, 0);
             g.node_mut(gate).unwrap().config["condition"] = json!(cond); // literal Bool
-            let a = g.add_node(NodeKind::Format, 0, 0);
-            let b = g.add_node(NodeKind::Format, 0, 0);
-            g.add_edge(gate, "true", a, "exec_in").unwrap();
-            g.add_edge(gate, "false", b, "exec_in").unwrap();
+            let a = g.add(NodeKind::Format, 0, 0);
+            let b = g.add(NodeKind::Format, 0, 0);
+            g.wire(gate, "true", a, "exec_in").unwrap();
+            g.wire(gate, "false", b, "exec_in").unwrap();
             let outs = run_dag(&g, &ctx).unwrap();
             let chosen = if want == "a" { a } else { b };
             let skipped = if skip == "a" { a } else { b };
@@ -1731,11 +1738,11 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.ui_tx = tx;
         let mut g = Graph::new("g");
-        let show = g.add_node(NodeKind::ShowImage, 0, 0);
+        let show = g.add(NodeKind::ShowImage, 0, 0);
         g.node_mut(show).unwrap().config =
             json!({ "label": "cam", "image": path.to_str().unwrap() });
         // run_orphans so the single, edgeless node participates in the run.
-        g.run_orphans = true;
+        g.meta.run_orphans = true;
         run_dag(&g, &ctx).unwrap();
 
         match rx.try_recv() {
@@ -1759,9 +1766,9 @@ mod tests {
         // Regression: a plain exec edge (no branch) must not gate anything off.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        let a = g.add(NodeKind::Format, 0, 0);
+        let b = g.add(NodeKind::Format, 0, 0);
+        g.wire(a, "exec_out", b, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(outs.contains_key(&a) && outs.contains_key(&b));
     }
@@ -1772,10 +1779,10 @@ mod tests {
         // step budget (it must error, not hang).
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
-        g.add_edge(b, "exec_out", a, "exec_in").unwrap(); // exec back-edge (allowed)
+        let a = g.add(NodeKind::Format, 0, 0);
+        let b = g.add(NodeKind::Format, 0, 0);
+        g.wire(a, "exec_out", b, "exec_in").unwrap();
+        g.wire(b, "exec_out", a, "exec_in").unwrap(); // exec back-edge (allowed)
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("step budget"), "got: {err}");
     }
@@ -1783,28 +1790,28 @@ mod tests {
     #[test]
     fn add_edge_allows_exec_back_edge_but_rejects_data_cycle() {
         let mut g = Graph::new("g");
-        let a = g.add_node(NodeKind::Format, 0, 0); // text out
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(a, "exec_out", b, "exec_in").unwrap();
+        let a = g.add(NodeKind::Format, 0, 0); // text out
+        let b = g.add(NodeKind::Format, 0, 0);
+        g.wire(a, "exec_out", b, "exec_in").unwrap();
         // exec back-edge → allowed (a loop).
-        assert!(g.add_edge(b, "exec_out", a, "exec_in").is_ok());
+        assert!(g.wire(b, "exec_out", a, "exec_in").is_ok());
         // data back-edge (b.text → a.p1) would create a data cycle → rejected.
-        let err = g.add_edge(b, "text", a, "p1").unwrap_err();
+        let err = g.wire(b, "text", a, "p1").unwrap_err();
         assert!(err.contains("data cycle"), "got: {err}");
     }
 
     #[test]
     fn add_edge_accepts_exec_fan_in_but_rejects_duplicate_pins() {
         let mut g = Graph::new("g");
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        let c = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(a, "exec_out", c, "exec_in").unwrap();
+        let a = g.add(NodeKind::Format, 0, 0);
+        let b = g.add(NodeKind::Format, 0, 0);
+        let c = g.add(NodeKind::Format, 0, 0);
+        g.wire(a, "exec_out", c, "exec_in").unwrap();
         // A second, different source converging on the same exec_in → allowed (fan-in).
-        assert!(g.add_edge(b, "exec_out", c, "exec_in").is_ok());
+        assert!(g.wire(b, "exec_out", c, "exec_in").is_ok());
         // The same pin pair again → rejected, so fan-in can't stack duplicate wires.
-        let err = g.add_edge(a, "exec_out", c, "exec_in").unwrap_err();
-        assert!(err.contains("already wired"), "got: {err}");
+        let err = g.wire(a, "exec_out", c, "exec_in").unwrap_err();
+        assert!(err.contains("already linked"), "got: {err}");
         assert_eq!(g.edges.len(), 2);
     }
 
@@ -1829,16 +1836,16 @@ mod tests {
         //                  → completed → Format("done").
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
-        g.debug = true;
-        let fe = g.add_node(NodeKind::ForEach, 0, 0);
+        g.meta.debug = true;
+        let fe = g.add(NodeKind::ForEach, 0, 0);
         g.node_mut(fe).unwrap().config["items"] = json!("a,b,c");
-        let body = g.add_node(NodeKind::Format, 0, 0);
+        let body = g.add(NodeKind::Format, 0, 0);
         g.node_mut(body).unwrap().config["template"] = json!("{p1}");
-        let done = g.add_node(NodeKind::Format, 0, 0);
+        let done = g.add(NodeKind::Format, 0, 0);
         g.node_mut(done).unwrap().config["template"] = json!("done");
-        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
-        g.add_edge(fe, "item", body, "p1").unwrap();
-        g.add_edge(fe, "completed", done, "exec_in").unwrap();
+        g.wire(fe, "loop_body", body, "exec_in").unwrap();
+        g.wire(fe, "item", body, "p1").unwrap();
+        g.wire(fe, "completed", done, "exec_in").unwrap();
 
         let (acts, logs) = run_capture(&g, &ctx);
         assert_eq!(
@@ -1880,39 +1887,38 @@ mod tests {
         let mut g = Graph::new("Face Test");
 
         // Created FIRST, exactly as in the real graph → lowest ids, wins the tie-break.
-        let get_image = g.add_node(NodeKind::GetVariable, 0, 0);
+        let get_image = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get_image).unwrap().config["variable"] = json!("image");
         g.node_mut(get_image).unwrap().config["type"] = json!("text");
 
         // The event's payload stand-in + the four Sets it fans out to.
-        let entry = g.add_node(NodeKind::Format, 0, 0);
+        let entry = g.add(NodeKind::Format, 0, 0);
         g.node_mut(entry).unwrap().config["template"] = json!("FRAME");
-        let set_image = g.add_node(NodeKind::SetVariable, 0, 0);
+        let set_image = g.add(NodeKind::SetVariable, 0, 0);
         g.node_mut(set_image).unwrap().config["variable"] = json!("image");
         g.node_mut(set_image).unwrap().config["type"] = json!("text");
-        g.add_edge(entry, "exec_out", set_image, "exec_in").unwrap();
-        g.add_edge(entry, "text", set_image, "value").unwrap();
+        g.wire(entry, "exec_out", set_image, "exec_in").unwrap();
+        g.wire(entry, "text", set_image, "value").unwrap();
 
         // face_width >= 20 AND face_confidence >= 60 → Branch, as in the real graph.
-        let gte_w = g.add_node(NodeKind::NumGte, 0, 0);
+        let gte_w = g.add(NodeKind::NumGte, 0, 0);
         g.node_mut(gte_w).unwrap().config["a"] = json!(33);
         g.node_mut(gte_w).unwrap().config["b"] = json!(20);
-        let gte_c = g.add_node(NodeKind::NumGte, 0, 0);
+        let gte_c = g.add(NodeKind::NumGte, 0, 0);
         g.node_mut(gte_c).unwrap().config["a"] = json!(89);
         g.node_mut(gte_c).unwrap().config["b"] = json!(60);
-        let and = g.add_node(NodeKind::And, 0, 0);
-        g.add_edge(gte_w, "result", and, "a").unwrap();
-        g.add_edge(gte_c, "result", and, "b").unwrap();
-        let branch = g.add_node(NodeKind::If, 0, 0);
-        g.add_edge(and, "result", branch, "condition").unwrap();
-        g.add_edge(set_image, "exec_out", branch, "exec_in")
-            .unwrap();
+        let and = g.add(NodeKind::And, 0, 0);
+        g.wire(gte_w, "result", and, "a").unwrap();
+        g.wire(gte_c, "result", and, "b").unwrap();
+        let branch = g.add(NodeKind::If, 0, 0);
+        g.wire(and, "result", branch, "condition").unwrap();
+        g.wire(set_image, "exec_out", branch, "exec_in").unwrap();
 
         // The gated consumer, fed from the Get — the node that reported the missing input.
-        let consumer = g.add_node(NodeKind::Format, 0, 0);
+        let consumer = g.add(NodeKind::Format, 0, 0);
         g.node_mut(consumer).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(branch, "true", consumer, "exec_in").unwrap();
-        g.add_edge(get_image, "value", consumer, "p1").unwrap();
+        g.wire(branch, "true", consumer, "exec_in").unwrap();
+        g.wire(get_image, "value", consumer, "p1").unwrap();
 
         assert!(
             get_image < set_image,
@@ -1939,20 +1945,20 @@ mod tests {
         let ctx = test_ctx();
         let mut g = Graph::new("vars-id-order");
         // Get FIRST → lowest id → wins the tie-break → would run before Set without the fix.
-        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        let get = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get).unwrap().config["variable"] = json!("greeting");
         g.node_mut(get).unwrap().config["type"] = json!("text");
-        let src = g.add_node(NodeKind::Format, 0, 0);
+        let src = g.add(NodeKind::Format, 0, 0);
         g.node_mut(src).unwrap().config["template"] = json!("hello");
-        let set = g.add_node(NodeKind::SetVariable, 0, 0);
+        let set = g.add(NodeKind::SetVariable, 0, 0);
         g.node_mut(set).unwrap().config["variable"] = json!("greeting");
         g.node_mut(set).unwrap().config["type"] = json!("text");
-        let sink = g.add_node(NodeKind::Format, 0, 0);
+        let sink = g.add(NodeKind::Format, 0, 0);
         g.node_mut(sink).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(src, "exec_out", set, "exec_in").unwrap();
-        g.add_edge(src, "text", set, "value").unwrap();
-        g.add_edge(set, "exec_out", sink, "exec_in").unwrap();
-        g.add_edge(get, "value", sink, "p1").unwrap();
+        g.wire(src, "exec_out", set, "exec_in").unwrap();
+        g.wire(src, "text", set, "value").unwrap();
+        g.wire(set, "exec_out", sink, "exec_in").unwrap();
+        g.wire(get, "value", sink, "p1").unwrap();
 
         let outs = run_dag(&g, &ctx).expect("run");
         let got = outs
@@ -1973,20 +1979,20 @@ mod tests {
         // The Get must read "hello" (the value Set wrote), not its epoch-0 zero default.
         let ctx = test_ctx();
         let mut g = Graph::new("vars");
-        let src = g.add_node(NodeKind::Format, 0, 0);
+        let src = g.add(NodeKind::Format, 0, 0);
         g.node_mut(src).unwrap().config["template"] = json!("hello");
-        let set = g.add_node(NodeKind::SetVariable, 0, 0);
+        let set = g.add(NodeKind::SetVariable, 0, 0);
         g.node_mut(set).unwrap().config["variable"] = json!("greeting");
         g.node_mut(set).unwrap().config["type"] = json!("text");
-        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        let get = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get).unwrap().config["variable"] = json!("greeting");
         g.node_mut(get).unwrap().config["type"] = json!("text");
-        let sink = g.add_node(NodeKind::Format, 0, 0);
+        let sink = g.add(NodeKind::Format, 0, 0);
         g.node_mut(sink).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(src, "exec_out", set, "exec_in").unwrap();
-        g.add_edge(src, "text", set, "value").unwrap();
-        g.add_edge(set, "exec_out", sink, "exec_in").unwrap();
-        g.add_edge(get, "value", sink, "p1").unwrap();
+        g.wire(src, "exec_out", set, "exec_in").unwrap();
+        g.wire(src, "text", set, "value").unwrap();
+        g.wire(set, "exec_out", sink, "exec_in").unwrap();
+        g.wire(get, "value", sink, "p1").unwrap();
 
         let outs = run_dag(&g, &ctx).expect("run");
         let got = outs
@@ -2004,28 +2010,28 @@ mod tests {
         // feeding its branch's `Format`. Only the `false`-branch Get should log.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        g.debug = true;
+        g.meta.debug = true;
 
-        let gate = g.add_node(NodeKind::If, 0, 0);
+        let gate = g.add(NodeKind::If, 0, 0);
         g.node_mut(gate).unwrap().config["condition"] = json!(false); // → false branch runs
 
         // TRUE branch (does NOT run): Get feeds the true-branch Format.
-        let get_a = g.add_node(NodeKind::GetVariable, 0, 0);
+        let get_a = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get_a).unwrap().config["variable"] = json!("a");
         g.node_mut(get_a).unwrap().config["type"] = json!("text");
-        let fmt_a = g.add_node(NodeKind::Format, 0, 0);
+        let fmt_a = g.add(NodeKind::Format, 0, 0);
         g.node_mut(fmt_a).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(gate, "true", fmt_a, "exec_in").unwrap();
-        g.add_edge(get_a, "value", fmt_a, "p1").unwrap();
+        g.wire(gate, "true", fmt_a, "exec_in").unwrap();
+        g.wire(get_a, "value", fmt_a, "p1").unwrap();
 
         // FALSE branch (runs): Get feeds the false-branch Format.
-        let get_b = g.add_node(NodeKind::GetVariable, 0, 0);
+        let get_b = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get_b).unwrap().config["variable"] = json!("b");
         g.node_mut(get_b).unwrap().config["type"] = json!("text");
-        let fmt_b = g.add_node(NodeKind::Format, 0, 0);
+        let fmt_b = g.add(NodeKind::Format, 0, 0);
         g.node_mut(fmt_b).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(gate, "false", fmt_b, "exec_in").unwrap();
-        g.add_edge(get_b, "value", fmt_b, "p1").unwrap();
+        g.wire(gate, "false", fmt_b, "exec_in").unwrap();
+        g.wire(get_b, "value", fmt_b, "p1").unwrap();
 
         let (_, logs) = run_capture(&g, &ctx);
         let logged: HashSet<u32> = logs.iter().map(|(id, _)| *id).collect();
@@ -2047,9 +2053,9 @@ mod tests {
         // A truly unused variable read (no outgoing edge) never lit a node → no log/highlight.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        g.debug = true;
-        g.run_orphans = true; // let the edgeless Get participate in the run
-        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.meta.debug = true;
+        g.meta.run_orphans = true; // let the edgeless Get participate in the run
+        let get = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get).unwrap().config["variable"] = json!("x");
         g.node_mut(get).unwrap().config["type"] = json!("text");
         let (_, logs) = run_capture(&g, &ctx);
@@ -2064,13 +2070,13 @@ mod tests {
         // A normal single-branch graph is unaffected: the Get feeds a Format that runs → it logs.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        g.debug = true;
-        let get = g.add_node(NodeKind::GetVariable, 0, 0);
+        g.meta.debug = true;
+        let get = g.add(NodeKind::GetVariable, 0, 0);
         g.node_mut(get).unwrap().config["variable"] = json!("greeting");
         g.node_mut(get).unwrap().config["type"] = json!("text");
-        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        let fmt = g.add(NodeKind::Format, 0, 0);
         g.node_mut(fmt).unwrap().config["template"] = json!("{p1}");
-        g.add_edge(get, "value", fmt, "p1").unwrap();
+        g.wire(get, "value", fmt, "p1").unwrap();
         let (_, logs) = run_capture(&g, &ctx);
         assert!(
             logs.iter().any(|(id, _)| *id == get),
@@ -2082,11 +2088,11 @@ mod tests {
     fn for_each_empty_list_only_fires_completed() {
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
-        let fe = g.add_node(NodeKind::ForEach, 0, 0); // items defaults to ""
-        let body = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
-        let done = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(fe, "completed", done, "exec_in").unwrap();
+        let fe = g.add(NodeKind::ForEach, 0, 0); // items defaults to ""
+        let body = g.add(NodeKind::Format, 0, 0);
+        g.wire(fe, "loop_body", body, "exec_in").unwrap();
+        let done = g.add(NodeKind::Format, 0, 0);
+        g.wire(fe, "completed", done, "exec_in").unwrap();
 
         let (acts, _) = run_capture(&g, &ctx);
         assert_eq!(
@@ -2107,10 +2113,10 @@ mod tests {
         // element (3×) — the element type is checked directly in `parse_text_items_typing`.
         let ctx = test_ctx();
         let mut g = Graph::new("loop");
-        let fe = g.add_node(NodeKind::ForEach, 0, 0);
+        let fe = g.add(NodeKind::ForEach, 0, 0);
         g.node_mut(fe).unwrap().config["items"] = json!("[1, 2, 3]");
-        let body = g.add_node(NodeKind::Print, 0, 0);
-        g.add_edge(fe, "loop_body", body, "exec_in").unwrap();
+        let body = g.add(NodeKind::Print, 0, 0);
+        g.wire(fe, "loop_body", body, "exec_in").unwrap();
         let (acts, _) = run_capture(&g, &ctx);
         assert_eq!(
             acts.iter().filter(|&&x| x == body).count(),
@@ -2137,15 +2143,15 @@ mod tests {
         let ctx = test_ctx();
         let mut g = Graph::new("g");
         // EmitEvent("seen") (entry) → Print, so it's connected and runs on a normal trigger.
-        let em = g.add_node(NodeKind::EmitEvent, 0, 0);
+        let em = g.add(NodeKind::EmitEvent, 0, 0);
         g.node_mut(em).unwrap().config["event"] = json!("seen");
-        let pr = g.add_node(NodeKind::Print, 0, 0);
-        g.add_edge(em, "exec_out", pr, "exec_in").unwrap();
+        let pr = g.add(NodeKind::Print, 0, 0);
+        g.wire(em, "exec_out", pr, "exec_in").unwrap();
         // OnEvent("seen") → Format: must NOT run on a normal trigger.
-        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        let on = g.add(NodeKind::OnEvent, 0, 0);
         g.node_mut(on).unwrap().config["event"] = json!("seen");
-        let fmt = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(on, "exec_out", fmt, "exec_in").unwrap();
+        let fmt = g.add(NodeKind::Format, 0, 0);
+        g.wire(on, "exec_out", fmt, "exec_in").unwrap();
 
         let mut fired: Vec<String> = Vec::new();
         let outs = run_dag_eventful(
@@ -2234,7 +2240,7 @@ mod tests {
         let devices = two_test_devices();
         let mut g = Graph::new("g");
         // Scoped: OnEvent("object_entered") with camera="hall" (a plain config literal, no wire).
-        let scoped = g.add_node(NodeKind::OnEvent, 0, 0);
+        let scoped = g.add(NodeKind::OnEvent, 0, 0);
         g.node_mut(scoped).unwrap().config = json!({ "event": "object_entered", "camera": "hall" });
         // Fires for hall's ip, not lobby's.
         assert_eq!(
@@ -2248,7 +2254,7 @@ mod tests {
 
         // Unscoped (no camera set) matches any camera — today's behaviour, unchanged.
         let mut g2 = Graph::new("g2");
-        let unscoped = g2.add_node(NodeKind::OnEvent, 0, 0);
+        let unscoped = g2.add(NodeKind::OnEvent, 0, 0);
         g2.node_mut(unscoped).unwrap().config = json!({ "event": "object_entered" });
         assert_eq!(
             on_event_node(&g2, "object_entered", Some("10.0.0.1"), &devices),
@@ -2270,11 +2276,11 @@ mod tests {
     fn on_event_node_camera_wired_from_get_camera_by_name() {
         let devices = two_test_devices();
         let mut g = Graph::new("g");
-        let cam = g.add_node(NodeKind::GetCameraByName, 0, 0);
+        let cam = g.add(NodeKind::GetCameraByName, 0, 0);
         g.node_mut(cam).unwrap().config = json!({ "camera": "lobby" });
-        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        let on = g.add(NodeKind::OnEvent, 0, 0);
         g.node_mut(on).unwrap().config = json!({ "event": "object_exited" });
-        g.add_edge(cam, "camera", on, "camera").unwrap();
+        g.wire(cam, "camera", on, "camera").unwrap();
 
         assert_eq!(
             on_event_node(&g, "object_exited", Some("10.0.0.2"), &devices),
@@ -2293,9 +2299,9 @@ mod tests {
         let mut g = Graph::new("g");
         // An event "seen" carrying a Text field "msg" — baked onto both nodes' config.
         let schema = json!({ "event": "seen", "payload": [{ "name": "msg", "type": "text" }] });
-        let em = g.add_node(NodeKind::EmitEvent, 0, 0);
+        let em = g.add(NodeKind::EmitEvent, 0, 0);
         g.node_mut(em).unwrap().config = schema.clone();
-        let on = g.add_node(NodeKind::OnEvent, 0, 0);
+        let on = g.add(NodeKind::OnEvent, 0, 0);
         g.node_mut(on).unwrap().config = schema;
 
         // EmitEvent gains a Text INPUT port "msg"; OnEvent a Text OUTPUT port "msg".
@@ -2309,12 +2315,12 @@ mod tests {
         );
 
         // The dynamic ports wire by type: Format.text → EmitEvent.msg, OnEvent.msg → Format.p1.
-        let src = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(src, "text", em, "msg")
+        let src = g.add(NodeKind::Format, 0, 0);
+        g.wire(src, "text", em, "msg")
             .expect("payload INPUT port wires by type");
-        let sink = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(on, "exec_out", sink, "exec_in").unwrap();
-        g.add_edge(on, "msg", sink, "p1")
+        let sink = g.add(NodeKind::Format, 0, 0);
+        g.wire(on, "exec_out", sink, "exec_in").unwrap();
+        g.wire(on, "msg", sink, "p1")
             .expect("payload OUTPUT port wires by type");
 
         // Firing the handler with a payload seeds the OnEvent's "msg" output for downstream.
@@ -2396,13 +2402,13 @@ mod tests {
     fn ask_ai_routes_true_branch_on_yes_answer() {
         let ctx = ctx_with_vision(true);
         let mut g = Graph::new("g");
-        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        let ai = g.add(NodeKind::AskAi, 0, 0);
         g.node_mut(ai).unwrap().config =
             json!({ "question": "Is someone there?", "timeout_secs": "65" });
-        let yes = g.add_node(NodeKind::Format, 0, 0);
-        let no = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(ai, "true", yes, "exec_in").unwrap();
-        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let yes = g.add(NodeKind::Format, 0, 0);
+        let no = g.add(NodeKind::Format, 0, 0);
+        g.wire(ai, "true", yes, "exec_in").unwrap();
+        g.wire(ai, "false", no, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(outs.contains_key(&ai), "AI If ran");
         assert!(outs.contains_key(&yes), "'true' branch ran (answer = YES)");
@@ -2413,13 +2419,13 @@ mod tests {
     fn ask_ai_routes_false_branch_on_no_answer() {
         let ctx = ctx_with_vision(false);
         let mut g = Graph::new("g");
-        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        let ai = g.add(NodeKind::AskAi, 0, 0);
         g.node_mut(ai).unwrap().config =
             json!({ "question": "Is someone there?", "timeout_secs": "65" });
-        let yes = g.add_node(NodeKind::Format, 0, 0);
-        let no = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(ai, "true", yes, "exec_in").unwrap();
-        g.add_edge(ai, "false", no, "exec_in").unwrap();
+        let yes = g.add(NodeKind::Format, 0, 0);
+        let no = g.add(NodeKind::Format, 0, 0);
+        g.wire(ai, "true", yes, "exec_in").unwrap();
+        g.wire(ai, "false", no, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(!outs.contains_key(&yes), "'true' branch skipped");
         assert!(outs.contains_key(&no), "'false' branch ran (answer = NO)");
@@ -2429,10 +2435,10 @@ mod tests {
     fn ask_ai_errors_without_question() {
         let ctx = ctx_with_vision(false);
         let mut g = Graph::new("g");
-        let ai = g.add_node(NodeKind::AskAi, 0, 0);
+        let ai = g.add(NodeKind::AskAi, 0, 0);
         // No question in config or wired
         g.node_mut(ai).unwrap().config = json!({ "question": "" });
-        g.run_orphans = true;
+        g.meta.run_orphans = true;
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("question is required"), "got: {err}");
     }
@@ -2440,16 +2446,14 @@ mod tests {
     #[test]
     fn ask_ai_wires_true_false_exec_ports() {
         let mut g = Graph::new("g");
-        let ai = g.add_node(NodeKind::AskAi, 0, 0);
-        let t = g.add_node(NodeKind::Format, 0, 0);
-        let f = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(ai, "true", t, "exec_in")
-            .expect("true port wires");
-        g.add_edge(ai, "false", f, "exec_in")
-            .expect("false port wires");
+        let ai = g.add(NodeKind::AskAi, 0, 0);
+        let t = g.add(NodeKind::Format, 0, 0);
+        let f = g.add(NodeKind::Format, 0, 0);
+        g.wire(ai, "true", t, "exec_in").expect("true port wires");
+        g.wire(ai, "false", f, "exec_in").expect("false port wires");
         // image and question wire correctly
-        let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
-        g.add_edge(snap, "image", ai, "image").expect("image wires");
+        let snap = g.add(NodeKind::CameraSnapshot, 0, 0);
+        g.wire(snap, "image", ai, "image").expect("image wires");
     }
 
     #[test]
@@ -2457,15 +2461,15 @@ mod tests {
         // StringSwitch("red") → fires the "red" arm; "blue" and "default" are skipped.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        let sw = g.add(NodeKind::StringSwitch, 0, 0);
         g.node_mut(sw).unwrap().config =
             json!({ "arms": ["red", "blue", "green"], "value": "red" });
-        let red = g.add_node(NodeKind::Format, 0, 0);
-        let blue = g.add_node(NodeKind::Format, 0, 0);
-        let def = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(sw, "red", red, "exec_in").unwrap();
-        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
-        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let red = g.add(NodeKind::Format, 0, 0);
+        let blue = g.add(NodeKind::Format, 0, 0);
+        let def = g.add(NodeKind::Format, 0, 0);
+        g.wire(sw, "red", red, "exec_in").unwrap();
+        g.wire(sw, "blue", blue, "exec_in").unwrap();
+        g.wire(sw, "default", def, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(outs.contains_key(&sw), "switch ran");
         assert!(outs.contains_key(&red), "matching arm 'red' ran");
@@ -2481,12 +2485,12 @@ mod tests {
         // StringSwitch("purple") → no arm matches → "default" fires, named arms skip.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        let sw = g.add(NodeKind::StringSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"], "value": "purple" });
-        let red = g.add_node(NodeKind::Format, 0, 0);
-        let def = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(sw, "red", red, "exec_in").unwrap();
-        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let red = g.add(NodeKind::Format, 0, 0);
+        let def = g.add(NodeKind::Format, 0, 0);
+        g.wire(sw, "red", red, "exec_in").unwrap();
+        g.wire(sw, "default", def, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(!outs.contains_key(&red), "'red' skipped");
         assert!(outs.contains_key(&def), "'default' fires on no match");
@@ -2497,17 +2501,17 @@ mod tests {
         // Wired value: Format → "blue" → StringSwitch routes to blue arm.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        let fmt = g.add(NodeKind::Format, 0, 0);
         g.node_mut(fmt).unwrap().config =
             json!({ "template": "blue", "p1": "", "p2": "", "p3": "" });
-        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        let sw = g.add(NodeKind::StringSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue", "green"] });
-        g.add_edge(fmt, "exec_out", sw, "exec_in").unwrap();
-        g.add_edge(fmt, "text", sw, "value").unwrap();
-        let blue = g.add_node(NodeKind::Format, 0, 0);
-        let def = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(sw, "blue", blue, "exec_in").unwrap();
-        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        g.wire(fmt, "exec_out", sw, "exec_in").unwrap();
+        g.wire(fmt, "text", sw, "value").unwrap();
+        let blue = g.add(NodeKind::Format, 0, 0);
+        let def = g.add(NodeKind::Format, 0, 0);
+        g.wire(sw, "blue", blue, "exec_in").unwrap();
+        g.wire(sw, "default", def, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(
             outs.contains_key(&blue),
@@ -2521,10 +2525,10 @@ mod tests {
         // No wired value and no config literal → run errors on missing required input.
         let ctx = test_ctx();
         let mut g = Graph::new("g");
-        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        let sw = g.add(NodeKind::StringSwitch, 0, 0);
         // arms set but no value literal or wire
         g.node_mut(sw).unwrap().config = json!({ "arms": ["red"] });
-        g.run_orphans = true;
+        g.meta.run_orphans = true;
         let err = run_dag(&g, &ctx).unwrap_err();
         assert!(err.contains("missing required input 'value'"), "got: {err}");
     }
@@ -2583,15 +2587,15 @@ mod tests {
         arms: serde_json::Value,
     ) -> (Graph, u32, u32, u32, u32) {
         let mut g = Graph::new("g");
-        g.run_orphans = true; // run the switch even without an upstream exec trigger
-        let sw = g.add_node(NodeKind::CameraSwitch, 0, 0);
+        g.meta.run_orphans = true; // run the switch even without an upstream exec trigger
+        let sw = g.add(NodeKind::CameraSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = serde_json::json!({ "arms": arms, "camera": camera_name });
-        let arm1 = g.add_node(NodeKind::Format, 0, 0);
-        let arm2 = g.add_node(NodeKind::Format, 0, 0);
-        let def = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(sw, "arm_1", arm1, "exec_in").unwrap();
-        g.add_edge(sw, "arm_2", arm2, "exec_in").unwrap();
-        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let arm1 = g.add(NodeKind::Format, 0, 0);
+        let arm2 = g.add(NodeKind::Format, 0, 0);
+        let def = g.add(NodeKind::Format, 0, 0);
+        g.wire(sw, "arm_1", arm1, "exec_in").unwrap();
+        g.wire(sw, "arm_2", arm2, "exec_in").unwrap();
+        g.wire(sw, "default", def, "exec_in").unwrap();
         (g, sw, arm1, arm2, def)
     }
 
@@ -2625,13 +2629,13 @@ mod tests {
         // Camera ip/id not in any arm → default fires; named arm skips.
         let ctx = test_ctx_with_cameras();
         let mut g = Graph::new("g");
-        g.run_orphans = true;
-        let sw = g.add_node(NodeKind::CameraSwitch, 0, 0);
+        g.meta.run_orphans = true;
+        let sw = g.add(NodeKind::CameraSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = json!({ "arms": ["10.0.0.99"], "camera": "hall" });
-        let arm1 = g.add_node(NodeKind::Format, 0, 0);
-        let def = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(sw, "arm_1", arm1, "exec_in").unwrap();
-        g.add_edge(sw, "default", def, "exec_in").unwrap();
+        let arm1 = g.add(NodeKind::Format, 0, 0);
+        let def = g.add(NodeKind::Format, 0, 0);
+        g.wire(sw, "arm_1", arm1, "exec_in").unwrap();
+        g.wire(sw, "default", def, "exec_in").unwrap();
         let outs = run_dag(&g, &ctx).unwrap();
         assert!(!outs.contains_key(&arm1), "arm_1 skipped (no match)");
         assert!(

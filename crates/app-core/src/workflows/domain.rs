@@ -2547,64 +2547,16 @@ impl Default for ConcurrencyPolicy {
 // Graph
 // ---------------------------------------------------------------------------
 
-/// One named automation: a trigger + a DAG of typed nodes/edges.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Graph {
-    pub id: Uuid,
-    pub name: String,
-    /// One-line summary shown as a caption under the name in the list. Additive —
-    /// old graphs deserialize with "".
-    #[serde(default)]
-    pub description: String,
-    /// Organisational label (a "group"). Workflows sharing a group cluster together in
-    /// the list, like log modules. Empty = ungrouped. Additive.
-    #[serde(default)]
-    pub group: String,
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub trigger: Trigger,
-    #[serde(default)]
-    pub concurrency: ConcurrencyPolicy,
-    /// What this graph runs one of (see [`InstanceScope`]). Additive: old graphs deserialize to
-    /// `Single`, which is exactly how they behaved before instances existed.
-    #[serde(default)]
-    pub instance_scope: InstanceScope,
-    /// Run nodes that have no edges (orphans on the canvas). Default `false` —
-    /// orphans are skipped so leftover/experimental nodes don't fire.
-    #[serde(default)]
-    pub run_orphans: bool,
-    /// Emit a per-node debug log line during a run (for the editor console).
-    #[serde(default)]
-    pub debug: bool,
-    /// This graph is a **template** — a starting point to clone, not a graph that runs on its own
-    /// (card #102). Shown in the templates picker; "Use template" duplicates it into a normal
-    /// workflow. A user's own template is tenant-scoped like any graph. Additive.
-    #[serde(default)]
-    pub template: bool,
-    /// A **global** template — visible to *every* tenant, not just its owner. Only a master can set
-    /// this (the auth check is in control); it lives in the master's own tenant but is read
-    /// cross-tenant for the catalog. Meaningless unless `template` is also true. Additive.
-    #[serde(default)]
-    pub global: bool,
-    #[serde(default = "one")]
-    pub next_id: u32,
-    #[serde(default)]
-    pub nodes: Vec<GraphNode>,
-    #[serde(default)]
-    pub edges: Vec<Edge>,
-    #[serde(default)]
-    pub viewport: Viewport,
-    /// Visual wire bend/reroute handles per edge (card #1), keyed `"from:from_port:to:to_port"`,
-    /// each a list of `[x, y]` world points. Purely cosmetic — the logical edge is unchanged — so
-    /// the user's wire organisation survives a reload. Additive (`{}` on old graphs).
-    #[serde(default)]
-    pub edge_vias: std::collections::HashMap<String, Vec<[i32; 2]>>,
-    /// Typed, per-graph variables (Unreal-style). Each spawns Get/Set Variable nodes whose
-    /// port type follows its declared type. Additive — old graphs deserialize with `[]`.
-    #[serde(default)]
-    pub variables: Vec<VariableDecl>,
-}
+/// One named automation: the engine's document, plus this product's policy.
+///
+/// A type alias rather than a struct of our own. Everything the engine understands about a graph
+/// — id, name, nodes, edges, the next id to hand out — is the engine's; everything this product
+/// decides about one lives in [`SentinelMeta`](crate::workflows::host::SentinelMeta), spliced
+/// into the same JSON object with `#[serde(flatten)]`.
+///
+/// What this replaces is a parallel struct with its own wiring rules, its own topological sort
+/// and its own idea of when an edge is legal. Two implementations of "may this wire exist" is
+/// how an editor starts drawing a link the scheduler then refuses.
 
 /// A workflow variable declaration: a name + its wire type. Declared in the editor's Variables
 /// panel; referenced by `GetVariable`/`SetVariable` nodes (which bake the name+type into config).
@@ -2628,53 +2580,43 @@ pub struct VariableDecl {
     pub description: Option<String>,
 }
 
-fn one() -> u32 {
-    1
+pub type Graph = ggraph_core::Graph<crate::workflows::host::SentinelMeta>;
+
+/// What this product's graphs can do beyond what any graph can.
+///
+/// `wire` rather than `add_edge`: the engine's inherent `add_edge` takes a registry, and an
+/// inherent method wins name resolution over a trait one. The different name is honest —
+/// this one already knows which registry to ask.
+pub trait GraphExt {
+    /// Add a node **with its kind's default configuration**.
+    ///
+    /// The engine's `add_node` leaves the config empty, and it has to: it does not know a
+    /// registry, so it cannot know what a kind's defaults are. Seeding them is this product's
+    /// job, and a node arriving on the canvas without them is one whose inspector opens blank.
+    fn add(&mut self, kind: NodeKind, x: i32, y: i32) -> u32;
+    fn wire(&mut self, from: u32, from_port: &str, to: u32, to_port: &str) -> Result<(), String>;
+    fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String>;
+    fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)>;
+    fn roots(&self) -> Vec<u32>;
+    fn remove_edge(&mut self, idx: usize);
+    /// Topological node order (stable: follows node insertion order on ties).
+    /// `Err` if the graph contains a cycle.
+    fn topo_order(&self) -> Result<Vec<u32>, String>;
+    fn back_edges(&self) -> HashSet<(u32, u32)>;
 }
 
-impl Graph {
-    pub fn new(name: &str) -> Self {
-        Graph {
-            template: false,
-            global: false,
-            instance_scope: InstanceScope::default(),
-            id: Uuid::new_v4(),
-            name: name.to_string(),
-            description: String::new(),
-            group: String::new(),
-            enabled: false,
-            trigger: Trigger::Manual,
-            concurrency: ConcurrencyPolicy::SkipIfRunning,
-            run_orphans: false,
-            debug: false,
-            next_id: 1,
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            viewport: Viewport::default(),
-            edge_vias: std::collections::HashMap::new(),
-            variables: Vec::new(),
+impl GraphExt for Graph {
+    fn add(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
+        let id = self.add_node(kind, x, y);
+        if let Some(n) = self.node_mut(id) {
+            n.config = kind.default_config();
         }
+        id
     }
 
-    pub fn node(&self, id: u32) -> Option<&GraphNode> {
-        self.nodes.iter().find(|n| n.id == id)
-    }
-
-    pub fn node_mut(&mut self, id: u32) -> Option<&mut GraphNode> {
-        self.nodes.iter_mut().find(|n| n.id == id)
-    }
-
-    /// The node feeding `to_port` on `to`, if wired — the single generic building block behind
-    /// every "resolve what a node's input currently refers to" lookup (camera, region, …).
-    /// Graph-static: reads only config, no execution — every producer this is used to resolve
-    /// (`GetCameraByName`, `Region`) is a pure, config-only node, so its value is 100%
-    /// determined by the graph alone, without running anything.
-    pub fn wired_source(&self, to: u32, to_port: &str) -> Option<&GraphNode> {
-        let edge = self
-            .edges
-            .iter()
-            .find(|e| e.to == to && e.to_port == to_port)?;
-        self.node(edge.from)
+    fn wire(&mut self, from: u32, from_port: &str, to: u32, to_port: &str) -> Result<(), String> {
+        self.add_edge(super::registry::registry(), from, from_port, to, to_port)
+            .map_err(|e| e.to_string())
     }
 
     /// What `node`'s `camera` input currently resolves to (an id/ip/name selector, NOT yet
@@ -2682,7 +2624,7 @@ impl Graph {
     /// `GetCameraByName` node's own `config.camera`, or (no wire) `node`'s OWN `config.camera`
     /// literal — the same wire-overrides-config pattern as `ObjectDetection`'s `class` input.
     /// `None` if neither is set, meaning "unscoped" to callers like `on_event_node`.
-    pub fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String> {
+    fn resolve_camera_selector(&self, node: &GraphNode) -> Option<String> {
         let cfg_str = |n: &GraphNode| {
             n.config
                 .get("camera")
@@ -2692,6 +2634,7 @@ impl Graph {
                 .map(str::to_string)
         };
         self.wired_source(node.id, "camera")
+            .and_then(|id| self.node(id))
             .filter(|n| n.kind == NodeKind::GetCameraByName)
             .and_then(cfg_str)
             .or_else(|| cfg_str(node))
@@ -2705,9 +2648,10 @@ impl Graph {
     /// camera is always the reading `OnEvent`'s own (`resolve_camera_selector`), so a region
     /// wired into a node scoped to a different camera is on the caller to catch, not silently
     /// cross-applied here.
-    pub fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)> {
+    fn resolve_region(&self, node: &GraphNode) -> Option<(String, Vec<(f32, f32)>)> {
         let region_node = self
             .wired_source(node.id, "region")
+            .and_then(|id| self.node(id))
             .filter(|n| n.kind == NodeKind::Region)?;
         let name = region_node
             .config
@@ -2735,40 +2679,8 @@ impl Graph {
         Some((name, points))
     }
 
-    /// Add a node at (x, y); returns its new id.
-    /// (recompute every time) — the user opts in to caching explicitly via the inspector.
-    pub fn add_node(&mut self, kind: NodeKind, x: i32, y: i32) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.nodes.push(GraphNode {
-            id,
-            kind: kind.into(),
-            x,
-            y,
-            config: kind.default_config(),
-        });
-        id
-    }
-
-    /// Remove a node and any edge that touches it.
-    pub fn remove_node(&mut self, id: u32) {
-        self.nodes.retain(|n| n.id != id);
-        self.edges.retain(|e| e.from != id && e.to != id);
-    }
-
-    /// Distinct downstream node ids reachable in one hop, in edge order.
-    pub fn children(&self, id: u32) -> Vec<u32> {
-        let mut out = Vec::new();
-        for e in &self.edges {
-            if e.from == id && !out.contains(&e.to) {
-                out.push(e.to);
-            }
-        }
-        out
-    }
-
     /// Nodes with no incoming edge (sources / fully-literal nodes).
-    pub fn roots(&self) -> Vec<u32> {
+    fn roots(&self) -> Vec<u32> {
         self.nodes
             .iter()
             .map(|n| n.id)
@@ -2776,109 +2688,7 @@ impl Graph {
             .collect()
     }
 
-    /// True if `target` is reachable from `start` over node-level edges.
-    fn reaches(&self, start: u32, target: u32) -> bool {
-        let mut stack = vec![start];
-        let mut seen = HashSet::new();
-        while let Some(n) = stack.pop() {
-            if n == target {
-                return true;
-            }
-            if !seen.insert(n) {
-                continue;
-            }
-            for c in self.children(n) {
-                stack.push(c);
-            }
-        }
-        false
-    }
-
-    /// Whether an output of type `from` may feed an input of type `to`: an exact match, or
-    /// either side is the `Any` wildcard (so `ForEach` accepts any array and yields any
-    /// element). Keeps every other pair strictly typed.
-    /// The engine's rule, not a second copy of it: equality plus the wildcard. Two
-    /// implementations of "may this wire exist" is how an editor starts allowing a link the
-    /// scheduler then refuses.
-    fn compatible(from: &PortType, to: &PortType) -> bool {
-        ggraph_core::compatible(from, to)
-    }
-
-    /// Validate and add a typed edge. Rejects: self-loop · unknown port ·
-    /// type mismatch · an already-fed input port · a cycle · an exact duplicate.
-    pub fn add_edge(
-        &mut self,
-        from: u32,
-        from_port: &str,
-        to: u32,
-        to_port: &str,
-    ) -> Result<(), String> {
-        if from == to {
-            return Err("a node cannot link to itself".into());
-        }
-        // Resolve port types from the NODES (config-aware), so payload ports on
-        // EmitEvent/OnEvent — derived from the configured event's schema — validate too.
-        let fnode = self.node(from).ok_or("source node not found")?;
-        let tnode = self.node(to).ok_or("target node not found")?;
-        let ft = fnode
-            .output_port(from_port)
-            .ok_or_else(|| {
-                format!(
-                    "{} has no output port '{from_port}'",
-                    fnode
-                        .kind
-                        .as_kind()
-                        .map(|k| k.label())
-                        .unwrap_or("unknown node")
-                )
-            })?
-            .ty;
-        let tt = tnode
-            .input_port(to_port)
-            .ok_or_else(|| {
-                format!(
-                    "{} has no input port '{to_port}'",
-                    tnode
-                        .kind
-                        .as_kind()
-                        .map(|k| k.label())
-                        .unwrap_or("unknown node")
-                )
-            })?
-            .ty;
-        if !Self::compatible(&ft, &tt) {
-            return Err(format!("type mismatch: {ft:?} → {tt:?}"));
-        }
-        // exec_in accepts fan-in (multiple execution paths converging on the same node —
-        // e.g. both branches of an If merging downstream). Data ports stay single-fed.
-        let is_exec = to_port == EXEC_IN.name;
-        if !is_exec
-            && self
-                .edges
-                .iter()
-                .any(|e| e.to == to && e.to_port == to_port)
-        {
-            return Err(format!("input '{to_port}' is already wired"));
-        }
-        // The same pin pair twice is a no-op wire the fan-in path would otherwise stack up.
-        if self.edges.iter().any(|e| {
-            e.from == from && e.from_port == from_port && e.to == to && e.to_port == to_port
-        }) {
-            return Err("those pins are already wired".into());
-        }
-        if self.reaches(to, from) && !is_exec {
-            return Err("that link would create a data cycle".into());
-        }
-        self.edges.push(Edge {
-            from,
-            from_port: PortName::new(from_port),
-            to,
-            to_port: PortName::new(to_port),
-        });
-        Ok(())
-    }
-
-    pub fn remove_edge(&mut self, idx: usize) {
+    fn remove_edge(&mut self, idx: usize) {
         if idx < self.edges.len() {
             self.edges.remove(idx);
         }
@@ -2886,7 +2696,7 @@ impl Graph {
 
     /// Topological node order (stable: follows node insertion order on ties).
     /// `Err` if the graph contains a cycle.
-    pub fn topo_order(&self) -> Result<Vec<u32>, String> {
+    fn topo_order(&self) -> Result<Vec<u32>, String> {
         let mut indeg: HashMap<u32, usize> = self.nodes.iter().map(|n| (n.id, 0)).collect();
         let mut adj: HashMap<u32, Vec<u32>> =
             self.nodes.iter().map(|n| (n.id, Vec::new())).collect();
@@ -2929,7 +2739,7 @@ impl Graph {
     /// DFS in node order (an edge to a node still on the recursion stack is a back-edge).
     /// Only exec edges can close a cycle — data cycles are rejected by [`Self::add_edge`].
     /// The engine excludes these from its forward ordering and uses them to re-enter loops.
-    pub fn back_edges(&self) -> HashSet<(u32, u32)> {
+    fn back_edges(&self) -> HashSet<(u32, u32)> {
         let mut color: HashMap<u32, u8> = self.nodes.iter().map(|n| (n.id, 0u8)).collect(); // 0 white · 1 gray (on stack) · 2 black
         let mut back: HashSet<(u32, u32)> = HashSet::new();
         for root in self.nodes.iter().map(|n| n.id) {
@@ -3084,14 +2894,14 @@ mod instance_scope_tests {
             serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000000","name":"old"}"#)
                 .unwrap();
         assert_eq!(
-            g.instance_scope,
+            g.meta.instance_scope,
             InstanceScope::Single,
             "a graph saved before instances is Single"
         );
         let mut g2 = Graph::new("g");
-        g2.instance_scope = InstanceScope::PerCamera;
+        g2.meta.instance_scope = InstanceScope::PerCamera;
         let back: Graph = serde_json::from_str(&serde_json::to_string(&g2).unwrap()).unwrap();
-        assert_eq!(back.instance_scope, InstanceScope::PerCamera);
+        assert_eq!(back.meta.instance_scope, InstanceScope::PerCamera);
     }
 }
 
@@ -3102,17 +2912,17 @@ mod tests {
     fn chain() -> (Graph, u32, u32) {
         // get_last_alert.message -> create_alert.message
         let mut g = Graph::new("test");
-        let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let b = g.add_node(NodeKind::CreateAlert, 30, 0);
-        g.add_edge(a, "message", b, "message").unwrap();
+        let a = g.add(NodeKind::GetLastAlert, 0, 0);
+        let b = g.add(NodeKind::CreateAlert, 30, 0);
+        g.wire(a, "message", b, "message").unwrap();
         (g, a, b)
     }
 
     #[test]
     fn add_node_assigns_incrementing_ids_and_default_config() {
         let mut g = Graph::new("g");
-        let a = g.add_node(NodeKind::CreateAlert, 1, 2);
-        let b = g.add_node(NodeKind::Format, 3, 4);
+        let a = g.add(NodeKind::CreateAlert, 1, 2);
+        let b = g.add(NodeKind::Format, 3, 4);
         assert_eq!((a, b), (1, 2));
         assert_eq!(g.next_id, 3);
         assert_eq!(g.node(a).unwrap().config["source"], "workflow");
@@ -3139,50 +2949,47 @@ mod tests {
     #[test]
     fn add_edge_rejects_type_mismatch_double_fed_cycle_and_unknown() {
         let mut g = Graph::new("g");
-        let snap = g.add_node(NodeKind::CameraSnapshot, 0, 0);
-        let fmt = g.add_node(NodeKind::Format, 0, 0);
+        let snap = g.add(NodeKind::CameraSnapshot, 0, 0);
+        let fmt = g.add(NodeKind::Format, 0, 0);
         assert!(g
-            .add_edge(snap, "image", fmt, "p1")
+            .wire(snap, "image", fmt, "p1")
             .unwrap_err()
-            .contains("type mismatch"));
-        assert!(g.add_edge(fmt, "text", fmt, "p1").is_err()); // self-loop
-        assert!(g.add_edge(snap, "nope", fmt, "p1").is_err()); // unknown port
+            .contains("cannot wire"));
+        assert!(g.wire(fmt, "text", fmt, "p1").is_err()); // self-loop
+        assert!(g.wire(snap, "nope", fmt, "p1").is_err()); // unknown port
 
-        let gla = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let ca = g.add_node(NodeKind::CreateAlert, 0, 0);
-        g.add_edge(gla, "message", ca, "message").unwrap();
+        let gla = g.add(NodeKind::GetLastAlert, 0, 0);
+        let ca = g.add(NodeKind::CreateAlert, 0, 0);
+        g.wire(gla, "message", ca, "message").unwrap();
         assert!(g
-            .add_edge(fmt, "text", ca, "message")
+            .wire(fmt, "text", ca, "message")
             .unwrap_err()
             .contains("already wired"));
 
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(a, "text", b, "p1").unwrap();
-        assert!(g
-            .add_edge(b, "text", a, "p1")
-            .unwrap_err()
-            .contains("cycle"));
+        let a = g.add(NodeKind::Format, 0, 0);
+        let b = g.add(NodeKind::Format, 0, 0);
+        g.wire(a, "text", b, "p1").unwrap();
+        assert!(g.wire(b, "text", a, "p1").unwrap_err().contains("cycle"));
     }
 
     #[test]
     fn exec_ports_wire_between_any_nodes_but_not_to_data() {
         let mut g = Graph::new("g");
-        let a = g.add_node(NodeKind::GetLastAlert, 0, 0);
-        let w = g.add_node(NodeKind::Wait, 0, 0);
-        let b = g.add_node(NodeKind::CreateAlert, 0, 0);
+        let a = g.add(NodeKind::GetLastAlert, 0, 0);
+        let w = g.add(NodeKind::Wait, 0, 0);
+        let b = g.add(NodeKind::CreateAlert, 0, 0);
         // exec → exec sequences nodes that share no data.
-        g.add_edge(a, "exec_out", w, "exec_in").unwrap();
-        g.add_edge(w, "exec_out", b, "exec_in").unwrap();
+        g.wire(a, "exec_out", w, "exec_in").unwrap();
+        g.wire(w, "exec_out", b, "exec_in").unwrap();
         // exec can't connect to a data port.
         assert!(g
-            .add_edge(a, "exec_out", b, "message")
+            .wire(a, "exec_out", b, "message")
             .unwrap_err()
-            .contains("type mismatch"));
+            .contains("cannot wire"));
         assert!(g
-            .add_edge(a, "message", b, "exec_in")
+            .wire(a, "message", b, "exec_in")
             .unwrap_err()
-            .contains("type mismatch"));
+            .contains("cannot wire"));
         // Wait is control-flow only — it has no data ports.
         assert!(NodeKind::Wait.input_ports().is_empty());
         assert!(NodeKind::Wait.output_ports().is_empty());
@@ -3191,12 +2998,12 @@ mod tests {
     #[test]
     fn if_node_has_true_false_exec_outputs() {
         let mut g = Graph::new("g");
-        let gate = g.add_node(NodeKind::If, 0, 0);
-        let a = g.add_node(NodeKind::Format, 0, 0);
+        let gate = g.add(NodeKind::If, 0, 0);
+        let a = g.add(NodeKind::Format, 0, 0);
         // Both branch pins are wireable, typed Exec.
-        g.add_edge(gate, "true", a, "exec_in").unwrap();
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        g.add_edge(gate, "false", b, "exec_in").unwrap();
+        g.wire(gate, "true", a, "exec_in").unwrap();
+        let b = g.add(NodeKind::Format, 0, 0);
+        g.wire(gate, "false", b, "exec_in").unwrap();
         let names: Vec<_> = NodeKind::If
             .exec_out_ports()
             .iter()
@@ -3211,9 +3018,9 @@ mod tests {
     #[test]
     fn graph_json_round_trips_with_trigger_concurrency_and_typed_edges() {
         let (mut g, _a, _b) = chain();
-        g.trigger = Trigger::Manual;
-        g.concurrency = ConcurrencyPolicy::QueueSingle { max_queued: 3 };
-        g.enabled = true;
+        g.meta.trigger = Trigger::Manual;
+        g.meta.concurrency = ConcurrencyPolicy::QueueSingle { max_queued: 3 };
+        g.meta.enabled = true;
         let s = serde_json::to_string(&g).unwrap();
         let g2: Graph = serde_json::from_str(&s).unwrap();
         assert_eq!(g, g2);
@@ -3242,26 +3049,21 @@ mod tests {
     #[test]
     fn string_switch_wires_arm_and_default_exec_ports() {
         let mut g = Graph::new("g");
-        let sw = g.add_node(NodeKind::StringSwitch, 0, 0);
+        let sw = g.add(NodeKind::StringSwitch, 0, 0);
         g.node_mut(sw).unwrap().config = json!({ "arms": ["red", "blue"] });
-        let a = g.add_node(NodeKind::Format, 0, 0);
-        let b = g.add_node(NodeKind::Format, 0, 0);
-        let d = g.add_node(NodeKind::Format, 0, 0);
+        let a = g.add(NodeKind::Format, 0, 0);
+        let b = g.add(NodeKind::Format, 0, 0);
+        let d = g.add(NodeKind::Format, 0, 0);
         // Named arm ports resolve and wire correctly.
-        g.add_edge(sw, "red", a, "exec_in")
-            .expect("'red' arm wires");
-        g.add_edge(sw, "blue", b, "exec_in")
-            .expect("'blue' arm wires");
+        g.wire(sw, "red", a, "exec_in").expect("'red' arm wires");
+        g.wire(sw, "blue", b, "exec_in").expect("'blue' arm wires");
         // The built-in default arm also wires.
-        g.add_edge(sw, "default", d, "exec_in")
+        g.wire(sw, "default", d, "exec_in")
             .expect("'default' arm wires");
         // An arm not in config is rejected.
-        let c = g.add_node(NodeKind::Format, 0, 0);
-        let err = g.add_edge(sw, "green", c, "exec_in").unwrap_err();
-        assert!(
-            err.contains("no output port"),
-            "unknown arm rejected: {err}"
-        );
+        let c = g.add(NodeKind::Format, 0, 0);
+        let err = g.wire(sw, "green", c, "exec_in").unwrap_err();
+        assert!(err.contains("has no port"), "unknown arm rejected: {err}");
     }
 
     #[test]
@@ -3289,8 +3091,8 @@ mod tests {
     #[test]
     fn multi_variable_nodes_derive_one_port_per_variable() {
         let mut g = Graph::new("multi");
-        let set = g.add_node(NodeKind::MultiSetVariable, 0, 0);
-        let get = g.add_node(NodeKind::MultiGetVariable, 0, 0);
+        let set = g.add(NodeKind::MultiSetVariable, 0, 0);
+        let get = g.add(NodeKind::MultiGetVariable, 0, 0);
         let cfg = json!({ "variables": [
             { "name": "bbox", "type": "bbox" },
             { "name": "confidence", "type": "num" },

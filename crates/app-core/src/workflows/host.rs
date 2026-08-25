@@ -26,22 +26,53 @@ use super::repo;
 
 /// The per-graph fields that are this product's policy rather than the engine's topology.
 ///
-/// They sit in [`Graph`](super::domain::Graph) today; when that becomes `Graph<SentinelMeta>`
-/// they move here, and `#[serde(flatten)]` keeps them at exactly the same place in the document.
+/// The engine's `Graph<M>` carries id, name, nodes, edges and next_id — the parts any graph has
+/// — and splices this in with `#[serde(flatten)]`, so every field below sits at the same level
+/// of the document it always did. What changed is only which struct declares it, and therefore
+/// who has an opinion about it: the engine has none about triggers, concurrency, templates, or
+/// where somebody left a canvas scrolled to.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SentinelMeta {
+    /// One-line summary shown as a caption under the name in the list.
+    #[serde(default)]
+    pub description: String,
+    /// Organisational label. Workflows sharing a group cluster together in the list.
+    #[serde(default)]
+    pub group: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub trigger: super::domain::Trigger,
     #[serde(default)]
     pub concurrency: super::domain::ConcurrencyPolicy,
+    /// What this graph runs one of. Old graphs deserialize to `Single`, which is exactly how
+    /// they behaved before instances existed.
     #[serde(default)]
     pub instance_scope: super::domain::InstanceScope,
+    /// Run nodes that have no edges. Default `false`, so leftover experiments do not fire.
     #[serde(default)]
     pub run_orphans: bool,
+    /// Emit a per-node debug line during a run, for the editor console.
     #[serde(default)]
     pub debug: bool,
+    /// A starting point to clone rather than a graph that runs on its own (#102).
+    #[serde(default)]
+    pub template: bool,
+    /// A template visible to every tenant. Only a master can set it, and it means nothing
+    /// unless `template` is also true.
+    #[serde(default)]
+    pub global: bool,
+    /// Where the canvas was left. Here rather than in the engine: the engine has no canvas, and
+    /// the forty-pixel starting offset is this editor's house style.
+    #[serde(default)]
+    pub viewport: super::domain::Viewport,
+    /// Wire bend handles per edge, keyed `"from:from_port:to:to_port"`. Cosmetic — the logical
+    /// edge is unchanged — so a user's wire organisation survives a reload.
+    #[serde(default)]
+    pub edge_vias: std::collections::HashMap<String, Vec<[i32; 2]>>,
+    /// Typed per-graph variables. Each spawns Get/Set Variable nodes typed by its declaration.
+    #[serde(default)]
+    pub variables: Vec<super::domain::VariableDecl>,
 }
 
 // ---------------------------------------------------------------------------------------

@@ -1,17 +1,6 @@
 {
   "id": "02020202-0202-0202-0202-020202020202",
   "name": "golden: for each",
-  "description": "",
-  "group": "",
-  "enabled": true,
-  "trigger": "Manual",
-  "concurrency": "SkipIfRunning",
-  "instance_scope": "Single",
-  "run_orphans": false,
-  "debug": false,
-  "template": false,
-  "global": false,
-  "next_id": 4,
   "nodes": [
     {
       "id": 1,
@@ -59,6 +48,17 @@
       "to_port": "exec_in"
     }
   ],
+  "next_id": 4,
+  "description": "",
+  "group": "",
+  "enabled": true,
+  "trigger": "Manual",
+  "concurrency": "SkipIfRunning",
+  "instance_scope": "Single",
+  "run_orphans": false,
+  "debug": false,
+  "template": false,
+  "global": false,
   "viewport": {
     "x": 40.0,
     "y": 40.0,

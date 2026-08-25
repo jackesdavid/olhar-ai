@@ -16,6 +16,7 @@ use uuid::Uuid;
 use app_core::workflows::domain::{Graph, NodeKind};
 
 use crate::store;
+use app_core::workflows::domain::GraphExt;
 
 /// The stable tenant that owns the shared template catalog. Tenants never see this tenant
 /// itself — only its `global` templates, surfaced in every picker by `load_global_templates`.
@@ -87,10 +88,10 @@ fn stable_id(n: u128) -> Uuid {
 fn template(id: u128, name: &str, desc: &str) -> Graph {
     let mut g = Graph::new(name);
     g.id = stable_id(id);
-    g.template = true;
-    g.global = true;
-    g.description = desc.to_string();
-    g.group = "Aprender".to_string();
+    g.meta.template = true;
+    g.meta.global = true;
+    g.meta.description = desc.to_string();
+    g.meta.group = "Aprender".to_string();
     g
 }
 
@@ -102,7 +103,7 @@ fn set_cfg(g: &mut Graph, node: u32, cfg: Value) {
 
 // Wire an edge; a wrong port name panics the build (caught by the `templates_build_*` test).
 fn wire(g: &mut Graph, from: u32, from_port: &str, to: u32, to_port: &str) {
-    g.add_edge(from, from_port, to, to_port)
+    g.wire(from, from_port, to, to_port)
         .unwrap_or_else(|e| panic!("template edge {from}:{from_port} → {to}:{to_port}: {e}"));
 }
 // Sequence: `from`'s exec output → `to`'s universal `exec_in`.
@@ -111,7 +112,7 @@ fn ex(g: &mut Graph, from: u32, from_exec: &str, to: u32) {
 }
 // A Title heading doc node.
 fn title(g: &mut Graph, x: i32, y: i32, text: &str) -> u32 {
-    let n = g.add_node(NodeKind::Title, x, y);
+    let n = g.add(NodeKind::Title, x, y);
     set_cfg(
         g,
         n,
@@ -121,7 +122,7 @@ fn title(g: &mut Graph, x: i32, y: i32, text: &str) -> u32 {
 }
 // A Markdown explainer doc node.
 fn note(g: &mut Graph, x: i32, y: i32, md: &str) -> u32 {
-    let n = g.add_node(NodeKind::Markdown, x, y);
+    let n = g.add(NodeKind::Markdown, x, y);
     set_cfg(g, n, json!({ "text": md, "width": 380, "height": 150 }));
     n
 }
@@ -135,14 +136,14 @@ fn onboarding_tour() -> Graph {
         "Introdução ao editor de workflows: gatilhos, nós, portas e como rodar. Só documentação — nada executa.",
     );
 
-    let title = g.add_node(NodeKind::Title, 40, 40);
+    let title = g.add(NodeKind::Title, 40, 40);
     set_cfg(
         &mut g,
         title,
         json!({ "text": "Bem-vindo ao editor de workflows", "color": "#e5e7eb", "size": "xl" }),
     );
 
-    let intro = g.add_node(NodeKind::Markdown, 40, 150);
+    let intro = g.add(NodeKind::Markdown, 40, 150);
     set_cfg(
         &mut g,
         intro,
@@ -152,7 +153,7 @@ fn onboarding_tour() -> Graph {
         }),
     );
 
-    let triggers = g.add_node(NodeKind::Markdown, 510, 150);
+    let triggers = g.add(NodeKind::Markdown, 510, 150);
     set_cfg(
         &mut g,
         triggers,
@@ -162,7 +163,7 @@ fn onboarding_tour() -> Graph {
         }),
     );
 
-    let tip = g.add_node(NodeKind::Comment, 40, 420);
+    let tip = g.add(NodeKind::Comment, 40, 420);
     set_cfg(
         &mut g,
         tip,
@@ -190,21 +191,21 @@ fn alerta_pessoa() -> Graph {
     );
     title(&mut g, 40, -120, "Alerta de pessoa");
     note(&mut g, 40, -60, "**When Event(motion)** pega o frame, detecta pessoas e — se houver — te avisa.\n\n- **Compare** count > 0\n- **Cooldown** evita spam (5 min)\n- **Notify** com a foto\n\nEscolha a câmera no nó Get current frame.");
-    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    let onev = g.add(NodeKind::OnEvent, -220, 120);
     set_cfg(&mut g, onev, json!({ "event": "motion" }));
-    let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
+    let frame = g.add(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
         frame,
         json!({ "camera": "first", "max_age_ms": "2000" }),
     );
-    let det = g.add_node(NodeKind::PersonDetection, 300, 120);
-    let cmp = g.add_node(NodeKind::Compare, 300, 320);
+    let det = g.add(NodeKind::PersonDetection, 300, 120);
+    let cmp = g.add(NodeKind::Compare, 300, 320);
     set_cfg(&mut g, cmp, json!({ "operator": ">", "a": "0", "b": "0" }));
-    let iff = g.add_node(NodeKind::If, 560, 120);
-    let cool = g.add_node(NodeKind::Cooldown, 820, 120);
+    let iff = g.add(NodeKind::If, 560, 120);
+    let cool = g.add(NodeKind::Cooldown, 820, 120);
     set_cfg(&mut g, cool, json!({ "window_secs": "300" }));
-    let notify = g.add_node(NodeKind::NotifyRecipient, 1080, 120);
+    let notify = g.add(NodeKind::NotifyRecipient, 1080, 120);
     set_cfg(&mut g, notify, json!({ "message": "Pessoa detectada" }));
     ex(&mut g, onev, "exec_out", frame);
     ex(&mut g, frame, "exec_out", det);
@@ -226,15 +227,15 @@ fn quem_na_porta() -> Graph {
     );
     title(&mut g, 40, -120, "Quem está na porta?");
     note(&mut g, 40, -60, "**Snapshot** → **Describe image** (a IA olha a foto e responde a pergunta) → **Notify**.\n\nRode com **Run now**. Precisa de `ANTHROPIC_API_KEY`.");
-    let snap = g.add_node(NodeKind::CameraSnapshot, 40, 120);
+    let snap = g.add(NodeKind::CameraSnapshot, 40, 120);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
-    let desc = g.add_node(NodeKind::DescribeImage, 320, 120);
+    let desc = g.add(NodeKind::DescribeImage, 320, 120);
     set_cfg(
         &mut g,
         desc,
         json!({ "label": "", "question": "Tem alguém na porta? O que você vê?" }),
     );
-    let notify = g.add_node(NodeKind::NotifyRecipient, 600, 120);
+    let notify = g.add(NodeKind::NotifyRecipient, 600, 120);
     set_cfg(&mut g, notify, json!({ "message": "" }));
     ex(&mut g, snap, "exec_out", desc);
     ex(&mut g, desc, "exec_out", notify);
@@ -255,25 +256,25 @@ fn snapshot_anotado() -> Graph {
     );
     title(&mut g, 40, -120, "Snapshot anotado");
     note(&mut g, 40, -60, "**Detect objects** → **For each** detecção → **Break** → **Draw BBox** + **Draw Text** → **Show image**.\n\nTroque a classe (person/car/…) no nó Detect objects.");
-    let snap = g.add_node(NodeKind::CameraSnapshot, 40, 140);
+    let snap = g.add(NodeKind::CameraSnapshot, 40, 140);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
-    let det = g.add_node(NodeKind::ObjectDetection, 300, 140);
+    let det = g.add(NodeKind::ObjectDetection, 300, 140);
     set_cfg(&mut g, det, json!({ "class": "person" }));
-    let fe = g.add_node(NodeKind::ForEach, 540, 140);
-    let brk = g.add_node(NodeKind::BreakDetection, 780, 140);
-    let dbox = g.add_node(NodeKind::DrawBbox, 1020, 140);
+    let fe = g.add(NodeKind::ForEach, 540, 140);
+    let brk = g.add(NodeKind::BreakDetection, 780, 140);
+    let dbox = g.add(NodeKind::DrawBbox, 1020, 140);
     set_cfg(
         &mut g,
         dbox,
         json!({ "color": "#00FF00", "thickness": "2", "style": "reticle", "expand": "0" }),
     );
-    let dtext = g.add_node(NodeKind::DrawText, 1260, 140);
+    let dtext = g.add(NodeKind::DrawText, 1260, 140);
     set_cfg(
         &mut g,
         dtext,
         json!({ "text": "objeto", "position": "top-left", "size": "18", "text_color": "#FFFFFF", "background": true, "bg_color": "#000000" }),
     );
-    let show = g.add_node(NodeKind::ShowImage, 1500, 140);
+    let show = g.add(NodeKind::ShowImage, 1500, 140);
     set_cfg(&mut g, show, json!({ "label": "anotado" }));
     ex(&mut g, snap, "exec_out", det);
     ex(&mut g, det, "exec_out", fe);
@@ -300,13 +301,13 @@ fn clipe_movimento() -> Graph {
     );
     title(&mut g, 40, -120, "Clipe em movimento");
     note(&mut g, 40, -60, "**When Event(motion)** → **Delay Trigger** (leading **start**, trailing **stop**) → **Start/Stop recording**.\n\nUma rajada de movimento = um clipe. Escolha a câmera nos nós de gravação.");
-    let onev = g.add_node(NodeKind::OnEvent, 40, 140);
+    let onev = g.add(NodeKind::OnEvent, 40, 140);
     set_cfg(&mut g, onev, json!({ "event": "motion" }));
-    let delay = g.add_node(NodeKind::DelayTrigger, 300, 140);
+    let delay = g.add(NodeKind::DelayTrigger, 300, 140);
     set_cfg(&mut g, delay, json!({ "wait_secs": 10, "extend_secs": 10 }));
-    let startrec = g.add_node(NodeKind::StartRecording, 560, 60);
+    let startrec = g.add(NodeKind::StartRecording, 560, 60);
     set_cfg(&mut g, startrec, json!({ "timeout_secs": "30" }));
-    let stoprec = g.add_node(NodeKind::StopRecording, 560, 240);
+    let stoprec = g.add(NodeKind::StopRecording, 560, 240);
     set_cfg(&mut g, stoprec, json!({ "timeout_secs": "15" }));
     ex(&mut g, onev, "exec_out", delay);
     wire(&mut g, delay, "start", startrec, "exec_in");
@@ -326,15 +327,15 @@ fn bot_comandos() -> Graph {
     );
     title(&mut g, 40, -120, "Bot de comandos");
     note(&mut g, 40, -60, "**When Event(telegram_message)** → **String switch** por comando → ação → **Reply to sender**.\n\nDepois de clonar, ligue `chat_id` (saída do When Event) no Reply to sender.");
-    let onev = g.add_node(NodeKind::OnEvent, 40, 140);
+    let onev = g.add(NodeKind::OnEvent, 40, 140);
     set_cfg(&mut g, onev, json!({ "event": "telegram_message" }));
-    let sw = g.add_node(NodeKind::StringSwitch, 300, 140);
+    let sw = g.add(NodeKind::StringSwitch, 300, 140);
     set_cfg(&mut g, sw, json!({ "arms": ["/snap", "/status"] }));
-    let snap = g.add_node(NodeKind::CameraSnapshot, 560, 60);
+    let snap = g.add(NodeKind::CameraSnapshot, 560, 60);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
-    let reply = g.add_node(NodeKind::ReplyToSender, 820, 60);
+    let reply = g.add(NodeKind::ReplyToSender, 820, 60);
     set_cfg(&mut g, reply, json!({ "message": "Aqui está" }));
-    let status = g.add_node(NodeKind::ReplyToSender, 560, 240);
+    let status = g.add(NodeKind::ReplyToSender, 560, 240);
     set_cfg(&mut g, status, json!({ "message": "Tudo funcionando ✅" }));
     ex(&mut g, onev, "exec_out", sw);
     wire(&mut g, sw, "/snap", snap, "exec_in");
@@ -353,21 +354,21 @@ fn bot_linguagem() -> Graph {
     );
     title(&mut g, 40, -120, "Bot em linguagem natural");
     note(&mut g, 40, -60, "**When Event(telegram_message)** → **AI Switch** (roteia pelo sentido) → tirar foto / responder → **Reply**.\n\nLigue `text` (do When Event) no AI Switch e `chat_id` nos Reply. Precisa de `ANTHROPIC_API_KEY`.");
-    let onev = g.add_node(NodeKind::OnEvent, 40, 160);
+    let onev = g.add(NodeKind::OnEvent, 40, 160);
     set_cfg(&mut g, onev, json!({ "event": "telegram_message" }));
-    let aisw = g.add_node(NodeKind::AiSwitch, 300, 160);
+    let aisw = g.add(NodeKind::AiSwitch, 300, 160);
     set_cfg(
         &mut g,
         aisw,
         json!({ "arms": ["tirar foto", "responder pergunta"], "timeout_secs": "30" }),
     );
-    let snap = g.add_node(NodeKind::CameraSnapshot, 560, 60);
+    let snap = g.add(NodeKind::CameraSnapshot, 560, 60);
     set_cfg(&mut g, snap, json!({ "camera": "first" }));
-    let reply = g.add_node(NodeKind::ReplyToSender, 820, 60);
+    let reply = g.add(NodeKind::ReplyToSender, 820, 60);
     set_cfg(&mut g, reply, json!({ "message": "Aqui está" }));
-    let ans = g.add_node(NodeKind::AiAnswer, 560, 260);
+    let ans = g.add(NodeKind::AiAnswer, 560, 260);
     set_cfg(&mut g, ans, json!({ "prompt": "", "timeout_secs": "30" }));
-    let reply2 = g.add_node(NodeKind::ReplyToSender, 820, 260);
+    let reply2 = g.add(NodeKind::ReplyToSender, 820, 260);
     set_cfg(&mut g, reply2, json!({ "message": "" }));
     ex(&mut g, onev, "exec_out", aisw);
     wire(&mut g, aisw, "tirar foto", snap, "exec_in");
@@ -392,7 +393,7 @@ fn relatorio_diario() -> Graph {
     note(&mut g, 40, -60, "**When Event (agenda, diário 08:00)** → frame → conta pessoas → **Format** monta o texto → **Notify**.\n\nO horário fica no próprio nó — abra-o pra mudar hora, dias ou fuso.\n\nExtensão: grave o número numa **Dictionary Table** com Add Row pra ter histórico.");
     // The schedule that used to be the GRAPH's trigger, now on the node that owns it. `payload: []`
     // matters: a schedule fire carries no data, so the node must not wear an event's output ports.
-    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    let onev = g.add(NodeKind::OnEvent, -220, 120);
     set_cfg(
         &mut g,
         onev,
@@ -411,21 +412,21 @@ fn relatorio_diario() -> Graph {
             },
         }),
     );
-    let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
+    let frame = g.add(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
         frame,
         json!({ "camera": "first", "max_age_ms": "2000" }),
     );
-    let det = g.add_node(NodeKind::PersonDetection, 300, 120);
-    let ntt = g.add_node(NodeKind::NumToText, 300, 300); // Num → Text so Format can use it
-    let fmt = g.add_node(NodeKind::Format, 560, 120);
+    let det = g.add(NodeKind::PersonDetection, 300, 120);
+    let ntt = g.add(NodeKind::NumToText, 300, 300); // Num → Text so Format can use it
+    let fmt = g.add(NodeKind::Format, 560, 120);
     set_cfg(
         &mut g,
         fmt,
         json!({ "template": "Ocupação agora: {p1} pessoa(s).", "p1": "", "p2": "", "p3": "" }),
     );
-    let notify = g.add_node(NodeKind::NotifyRecipient, 820, 120);
+    let notify = g.add(NodeKind::NotifyRecipient, 820, 120);
     set_cfg(&mut g, notify, json!({ "message": "" }));
     ex(&mut g, frame, "exec_out", det);
     ex(&mut g, det, "exec_out", notify);
@@ -445,15 +446,15 @@ fn cruzamento_linha() -> Graph {
     );
     title(&mut g, 40, -120, "Cruzamento de linha");
     note(&mut g, 40, -60, "**Region** (desenhe a linha) reutilizada em **When Event(line_crossed)** → **Notify**.\n\nDepois de clonar, desenhe a linha no nó Region e ligue-o ao When Event (campo região).");
-    let region = g.add_node(NodeKind::Region, 40, 300);
+    let region = g.add(NodeKind::Region, 40, 300);
     set_cfg(
         &mut g,
         region,
         json!({ "camera": "first", "name": "linha", "points": [] }),
     );
-    let onev = g.add_node(NodeKind::OnEvent, 40, 120);
+    let onev = g.add(NodeKind::OnEvent, 40, 120);
     set_cfg(&mut g, onev, json!({ "event": "line_crossed" }));
-    let notify = g.add_node(NodeKind::NotifyRecipient, 320, 120);
+    let notify = g.add(NodeKind::NotifyRecipient, 320, 120);
     set_cfg(
         &mut g,
         notify,
@@ -475,18 +476,18 @@ fn reconhece_rosto() -> Graph {
     );
     title(&mut g, 40, -140, "Reconhecimento de rostos");
     note(&mut g, 40, -80, "**When Event(face_detected)** → **Extract Face Embedding** → **Recognize Face** → **If(found)** → **Notify** · senão **Store Face** (desconhecido).\n\nLigue o frame (do evento) no Extract Face Embedding. Precisa do serviço de IA.");
-    let onev = g.add_node(NodeKind::OnEvent, 40, 160);
+    let onev = g.add(NodeKind::OnEvent, 40, 160);
     set_cfg(&mut g, onev, json!({ "event": "face_detected" }));
-    let emb = g.add_node(NodeKind::FaceEmbedding, 300, 160);
-    let rec = g.add_node(NodeKind::RecognizeFace, 560, 160);
-    let iff = g.add_node(NodeKind::If, 820, 160);
-    let notify = g.add_node(NodeKind::NotifyRecipient, 1080, 60);
+    let emb = g.add(NodeKind::FaceEmbedding, 300, 160);
+    let rec = g.add(NodeKind::RecognizeFace, 560, 160);
+    let iff = g.add(NodeKind::If, 820, 160);
+    let notify = g.add(NodeKind::NotifyRecipient, 1080, 60);
     set_cfg(
         &mut g,
         notify,
         json!({ "message": "Rosto conhecido reconhecido" }),
     );
-    let store = g.add_node(NodeKind::StoreFace, 1080, 260);
+    let store = g.add(NodeKind::StoreFace, 1080, 260);
     set_cfg(
         &mut g,
         store,
@@ -512,17 +513,17 @@ fn luz_presenca() -> Graph {
     );
     title(&mut g, 40, -120, "Luz por presença");
     note(&mut g, 40, -60, "**When Event(object_entered)** → **Control Tuya** (liga) · **When Event(object_exited)** → **Control Tuya** (desliga).\n\nEscolha o dispositivo e o data point Tuya em cada nó (Integrations → Tuya).");
-    let onin = g.add_node(NodeKind::OnEvent, 40, 120);
+    let onin = g.add(NodeKind::OnEvent, 40, 120);
     set_cfg(&mut g, onin, json!({ "event": "object_entered" }));
-    let ton = g.add_node(NodeKind::TuyaControl, 320, 120);
+    let ton = g.add(NodeKind::TuyaControl, 320, 120);
     set_cfg(
         &mut g,
         ton,
         json!({ "tuya_device": "", "tuya_code": "", "value": "true", "value_type": "bool", "timeout_secs": "15" }),
     );
-    let onout = g.add_node(NodeKind::OnEvent, 40, 300);
+    let onout = g.add(NodeKind::OnEvent, 40, 300);
     set_cfg(&mut g, onout, json!({ "event": "object_exited" }));
-    let toff = g.add_node(NodeKind::TuyaControl, 320, 300);
+    let toff = g.add(NodeKind::TuyaControl, 320, 300);
     set_cfg(
         &mut g,
         toff,
@@ -544,16 +545,16 @@ fn presenca_mapa() -> Graph {
     );
     title(&mut g, 40, -120, "Presença viva no Mapa");
     note(&mut g, 40, -60, "**When Event(motion)** → frame → detecta pessoas → **Record presence** (categoria `person`).\n\nAbra o **Mapa** pra ver o pulso ao vivo. Escolha a câmera/sala.");
-    let onev = g.add_node(NodeKind::OnEvent, -220, 120);
+    let onev = g.add(NodeKind::OnEvent, -220, 120);
     set_cfg(&mut g, onev, json!({ "event": "motion" }));
-    let frame = g.add_node(NodeKind::GetCurrentFrame, 40, 120);
+    let frame = g.add(NodeKind::GetCurrentFrame, 40, 120);
     set_cfg(
         &mut g,
         frame,
         json!({ "camera": "first", "max_age_ms": "2000" }),
     );
-    let det = g.add_node(NodeKind::PersonDetection, 300, 120);
-    let pres = g.add_node(NodeKind::RecordPresence, 560, 120);
+    let det = g.add(NodeKind::PersonDetection, 300, 120);
+    let pres = g.add(NodeKind::RecordPresence, 560, 120);
     set_cfg(
         &mut g,
         pres,
@@ -577,7 +578,7 @@ mod tests {
         let mut ids = HashSet::new();
         for g in &ts {
             assert!(
-                g.template && g.global,
+                g.meta.template && g.meta.global,
                 "template {} must be template+global",
                 g.name
             );

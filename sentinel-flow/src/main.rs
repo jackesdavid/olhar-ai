@@ -81,7 +81,7 @@ fn main() {
                 s.reload_graphs();
                 let (n, enabled) = {
                     let store = s.store.lock().unwrap();
-                    (store.len(), store.iter().filter(|(_, g)| g.enabled).count())
+                    (store.len(), store.iter().filter(|(_, g)| g.meta.enabled).count())
                 };
                 log::info!(
                     "graphs reloaded via NOTIFY — {n} graph(s), {enabled} enabled (pod {})",

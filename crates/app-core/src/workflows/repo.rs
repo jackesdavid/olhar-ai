@@ -143,7 +143,7 @@ pub fn rename_recipient(db: &Db, tenant_id: Uuid, old: &str, new: &str) -> usize
                 changed = true;
             }
         }
-        for v in &mut g.variables {
+        for v in &mut g.meta.variables {
             if v.ty == crate::workflows::domain::types::RECIPIENT
                 && v.default.as_deref() == Some(old)
             {

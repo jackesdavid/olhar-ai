@@ -23,6 +23,7 @@
 use super::domain::{Graph, NodeKind};
 use super::node::{PortValue, PortValues};
 use crate::agent::tools::ToolContext;
+use crate::workflows::domain::GraphExt;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -34,7 +35,7 @@ fn fixed_id(n: u8) -> Uuid {
 fn graph(name: &str, id: u8) -> Graph {
     let mut g = Graph::new(name);
     g.id = fixed_id(id);
-    g.enabled = true;
+    g.meta.enabled = true;
     g
 }
 
@@ -48,7 +49,7 @@ fn cfg(g: &mut Graph, id: u32, v: Value) {
 }
 
 fn wire(g: &mut Graph, from: u32, from_port: &str, to: u32, to_port: &str) {
-    g.add_edge(from, from_port, to, to_port)
+    g.wire(from, from_port, to, to_port)
         .unwrap_or_else(|e| panic!("wire {from}.{from_port} -> {to}.{to_port}: {e}"));
 }
 
@@ -62,10 +63,10 @@ fn wire(g: &mut Graph, from: u32, from_port: &str, to: u32, to_port: &str) {
 /// subtree unexecuted. A scheduler that ran both arms would still report `ok`.
 fn shape_branch() -> Graph {
     let mut g = graph("golden: branch", 1);
-    let gt = g.add_node(NodeKind::NumGt, 0, 0);
-    let br = g.add_node(NodeKind::If, 200, 0);
-    let hot = g.add_node(NodeKind::Print, 400, -80);
-    let cold = g.add_node(NodeKind::Print, 400, 80);
+    let gt = g.add(NodeKind::NumGt, 0, 0);
+    let br = g.add(NodeKind::If, 200, 0);
+    let hot = g.add(NodeKind::Print, 400, -80);
+    let cold = g.add(NodeKind::Print, 400, 80);
     cfg(&mut g, gt, json!({ "a": "5", "b": "3" }));
     cfg(
         &mut g,
@@ -89,9 +90,9 @@ fn shape_branch() -> Graph {
 /// where an off-by-one in the epoch scheduler is invisible to every other test.
 fn shape_for_each() -> Graph {
     let mut g = graph("golden: for each", 2);
-    let each = g.add_node(NodeKind::ForEach, 0, 0);
-    let body = g.add_node(NodeKind::Print, 250, -80);
-    let done = g.add_node(NodeKind::Print, 250, 80);
+    let each = g.add(NodeKind::ForEach, 0, 0);
+    let body = g.add(NodeKind::Print, 250, -80);
+    let done = g.add(NodeKind::Print, 250, 80);
     cfg(&mut g, each, json!({ "items": "alpha,beta,gamma" }));
     cfg(
         &mut g,
@@ -116,10 +117,10 @@ fn shape_for_each() -> Graph {
 /// arms positionally instead — the wire format depends on both).
 fn shape_switch() -> Graph {
     let mut g = graph("golden: switch", 3);
-    let fmt = g.add_node(NodeKind::Format, 0, 0);
-    let sw = g.add_node(NodeKind::StringSwitch, 250, 0);
-    let a = g.add_node(NodeKind::Print, 500, -80);
-    let b = g.add_node(NodeKind::Print, 500, 80);
+    let fmt = g.add(NodeKind::Format, 0, 0);
+    let sw = g.add(NodeKind::StringSwitch, 250, 0);
+    let a = g.add(NodeKind::Print, 500, -80);
+    let b = g.add(NodeKind::Print, 500, 80);
     cfg(
         &mut g,
         fmt,
@@ -326,9 +327,9 @@ fn a_node_saved_before_memoize_was_removed_still_loads() {
 /// fails, the activation is load-bearing and the fix has to be shaped differently.
 fn shape_orphan_source_subrun() -> (Graph, u32, u32, u32) {
     let mut g = graph("golden: orphan source in a sub-run", 4);
-    let src = g.add_node(NodeKind::GetVariable, 0, 0);
-    let switch = g.add_node(NodeKind::StringSwitch, 250, 0);
-    let taken = g.add_node(NodeKind::Print, 500, 0);
+    let src = g.add(NodeKind::GetVariable, 0, 0);
+    let switch = g.add(NodeKind::StringSwitch, 250, 0);
+    let taken = g.add(NodeKind::Print, 500, 0);
     cfg(
         &mut g,
         src,
@@ -428,23 +429,23 @@ fn the_orphan_source_is_read_at_the_moment_its_consumer_runs() {
 #[test]
 fn only_the_get_on_the_live_branch_lights_up() {
     let mut g = graph("golden: two arms, two gets", 5);
-    g.debug = false;
+    g.meta.debug = false;
 
-    let gate = g.add_node(NodeKind::If, 0, 0);
+    let gate = g.add(NodeKind::If, 0, 0);
     cfg(&mut g, gate, json!({ "condition": false }));
 
-    let get_dead = g.add_node(NodeKind::GetVariable, 0, -120);
+    let get_dead = g.add(NodeKind::GetVariable, 0, -120);
     cfg(&mut g, get_dead, json!({ "variable": "a", "type": "text" }));
-    let fmt_dead = g.add_node(NodeKind::Format, 250, -120);
+    let fmt_dead = g.add(NodeKind::Format, 250, -120);
     cfg(
         &mut g,
         fmt_dead,
         json!({ "template": "{p1}", "p1": "", "p2": "", "p3": "" }),
     );
 
-    let get_live = g.add_node(NodeKind::GetVariable, 0, 120);
+    let get_live = g.add(NodeKind::GetVariable, 0, 120);
     cfg(&mut g, get_live, json!({ "variable": "b", "type": "text" }));
-    let fmt_live = g.add_node(NodeKind::Format, 250, 120);
+    let fmt_live = g.add(NodeKind::Format, 250, 120);
     cfg(
         &mut g,
         fmt_live,
@@ -482,9 +483,9 @@ fn only_the_get_on_the_live_branch_lights_up() {
 fn the_engine_reports_which_arm_fired_not_which_node_was_reached() {
     let mut g = graph("golden: two branches, one target", 6);
 
-    let gate = g.add_node(NodeKind::If, 0, 0);
+    let gate = g.add(NodeKind::If, 0, 0);
     cfg(&mut g, gate, json!({ "condition": false }));
-    let target = g.add_node(NodeKind::Print, 300, 0);
+    let target = g.add(NodeKind::Print, 300, 0);
     cfg(
         &mut g,
         target,

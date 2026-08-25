@@ -39,7 +39,7 @@ pub fn reconcile(state: &AppState) {
     let jobs: Vec<(Uuid, Uuid, Option<u32>, String)> = {
         let s = state.store.lock().unwrap();
         s.iter()
-            .filter(|(_, g)| g.enabled)
+            .filter(|(_, g)| g.meta.enabled)
             // One job per SCHEDULED NODE, not per graph. A graph may hold several `When Event`
             // nodes in cron mode — the driving case is one turning devices on and another turning
             // them off — and the graph-keyed model could not express that at all.
@@ -106,7 +106,7 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
     };
     let node_id = job.payload.get("node").and_then(|v| v.as_u64()).map(|n| n as u32);
     // Read the LIVE graph so an edit / disable since the job was enqueued takes effect.
-    let Some(g) = state::find_graph(&state.store, job.tenant_id, graph_id).filter(|g| g.enabled)
+    let Some(g) = state::find_graph(&state.store, job.tenant_id, graph_id).filter(|g| g.meta.enabled)
     else {
         // graph gone or disabled → drop; reconcile re-arms if it comes back enabled
         work_queue::mark_done_blocking(&state.db, job.id);
