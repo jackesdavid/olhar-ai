@@ -74,6 +74,10 @@ kanban-plugin: board
 
 ## Specification
 
+- [ ] #203 Widget + deep link in the Tauri shell
+	  - Plan: [[tauri-widget-and-deeplink]]
+	  - Depends on #202; BLOCKS retiring sentinel-mobile — pinned.ts is what writes the
+	    App Group the widget reads, so the shell needs a Rust write path first.
 - [ ] #202 Tauri v2 mobile — share the web app instead of maintaining a second UI
 	  - Plan: [[tauri-mobile-shared-web]]
 	  - Blocked until #185 (App Store readiness) lands — swapping the shell restarts it.
