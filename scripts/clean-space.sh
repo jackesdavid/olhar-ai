@@ -68,9 +68,17 @@ run "Homebrew downloads"      brew cleanup -s --prune=all
 
 echo
 echo "Docker"
-# Images and build cache that nothing running depends on. NOT `--volumes`: those hold the local
-# Postgres from `task db-up`, and losing a dev database to a disk-cleanup command is a bad trade.
-run "unused images + cache"   docker system prune -af
+# Unused images. NOT `system prune`, which takes the BUILD CACHE with them — and this machine is
+# the CI runner, so a cold cargo-chef layer is paid back at about twenty minutes per Rust build.
+# Measured: `build:rust` went 24 → 43 minutes across runs where this had wiped the cache, and
+# `docker system df` reported `Build Cache 0B` afterwards every time.
+run "unused images"           docker image prune -af
+# The cache itself, trimmed rather than emptied: a week is long enough that an ordinary week of
+# commits keeps hitting it, and short enough that a branch nobody touched since is not being
+# stored for free.
+run "build cache over a week" docker builder prune -f --filter until=168h
+# NOT `--volumes` anywhere above: those hold the local Postgres from `task db-up`, and losing a
+# dev database to a disk-cleanup command is a bad trade.
 
 echo
 after_kb=$(df -k / | awk 'NR==2 {print $4}')
