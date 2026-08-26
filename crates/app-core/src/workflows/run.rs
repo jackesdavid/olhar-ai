@@ -54,14 +54,20 @@ pub fn run(graph: &Graph, host: &SentinelHost, start: Start) -> Result<usize, St
         },
     };
 
-    let outputs = ggraph_core::run(
-        graph,
-        super::registry::registry(),
-        host,
-        &entry,
-        &ggraph_core::RunOptions::default(),
-    )
-    .map_err(|e| e.to_string())?;
+    let opts = ggraph_core::RunOptions {
+        // A node wired to nothing is normally a leftover somebody dropped on the canvas while
+        // trying something out. Running it is how a graph sends a notification nobody asked for,
+        // so a graph says outright when it means to be a bag of independent nodes.
+        isolated: if graph.meta.run_orphans {
+            ggraph_core::exec::Isolated::Run
+        } else {
+            ggraph_core::exec::Isolated::Skip
+        },
+        ..Default::default()
+    };
+
+    let outputs = ggraph_core::run(graph, super::registry::registry(), host, &entry, &opts)
+        .map_err(|e| e.to_string())?;
 
     remember(graph, host, &instance, &outputs);
     Ok(outputs.len())

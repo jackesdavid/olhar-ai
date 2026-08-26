@@ -129,7 +129,16 @@ fn order_engine(g: &Graph, sys: ToolContext, entry: EntryAt) -> Result<Trace, St
         super::registry::registry(),
         &host,
         &entry,
-        &RunOptions::default(),
+        &RunOptions {
+            // Mirrors the facade: the driver skips unwired nodes unless the graph opts in, and a
+            // harness that ran them anyway would report a difference of its own making.
+            isolated: if g.meta.run_orphans {
+                ggraph_core::exec::Isolated::Run
+            } else {
+                ggraph_core::exec::Isolated::Skip
+            },
+            ..Default::default()
+        },
     )
     .map_err(|e| e.to_string())?;
     let nodes = rec.nodes.lock().unwrap().clone();
@@ -524,5 +533,45 @@ mod tests {
             crate::workflows::PortValue::Text("hello".into()),
         );
         agree_from("delivery", &x, Some((on, payload)));
+    }
+
+    /// A node dropped on the canvas and never wired stays quiet.
+    ///
+    /// It has no incoming exec edge, so a scheduler reading the graph plainly treats it as a place
+    /// control can start. `run_orphans` has said otherwise since long before any of this, and its
+    /// own doc says why: leftover experiments must not fire. If the leftover is a Notify, running
+    /// it is a message to a real person that nobody asked for.
+    #[test]
+    fn a_leftover_on_the_canvas_does_not_fire() {
+        let mut x = g("leftover");
+        let a = x.add(NodeKind::Print, 0, 0);
+        x.node_mut(a).unwrap().config =
+            json!({ "message": "wired", "level": "info", "on_screen": false });
+        let b = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(b).unwrap().config =
+            json!({ "message": "also wired", "level": "info", "on_screen": false });
+        x.wire(a, "exec_out", b, "exec_in").unwrap();
+
+        let leftover = x.add(NodeKind::Print, 0, 200);
+        x.node_mut(leftover).unwrap().config =
+            json!({ "message": "forgotten", "level": "info", "on_screen": false });
+
+        agree("leftover", &x);
+
+        let seen = order_engine(&x, test_ctx(), None).expect("runs").nodes;
+        assert_eq!(
+            seen,
+            vec![a, b],
+            "the unwired node must stay out of the run: {seen:?}"
+        );
+
+        // And a graph that means to be a bag of independent nodes says so.
+        x.meta.run_orphans = true;
+        let seen = order_engine(&x, test_ctx(), None).expect("runs").nodes;
+        assert!(
+            seen.contains(&leftover),
+            "asked for explicitly, it runs: {seen:?}"
+        );
+        agree("leftover, asked for", &x);
     }
 }
