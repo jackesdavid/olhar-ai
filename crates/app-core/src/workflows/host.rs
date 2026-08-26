@@ -386,14 +386,16 @@ impl Host for SentinelHost {
         // "One run per camera" is a rule about cameras, and it belongs here rather than in an
         // engine that has never heard of one. The engine only needs two signals with different
         // keys not to share node state.
-        match meta.instance_scope {
-            super::domain::InstanceScope::Single => SmolStr::default(),
-            super::domain::InstanceScope::PerCamera => payload
-                .get("camera")
-                .and_then(Value::as_text)
-                .map(|s| SmolStr::new(s.trim()))
-                .unwrap_or_default(),
-        }
+        //
+        // Delegated rather than restated, and that is the whole point. This used to read the
+        // camera with `as_text`, which answers None for a payload carrying a camera ENTITY rather
+        // than an ip — and the wire carries both, depending on whether `seed_event_payload` has
+        // run yet. So a per-camera graph armed a window under "cam-1" and looked for it under ""
+        // one function later. One rule, one implementation, no chance of the two drifting.
+        SmolStr::new(
+            meta.instance_scope
+                .key_for(&super::compat::from_engine_values(payload)),
+        )
     }
 
     fn literals(&self) -> &dyn Literals {
@@ -470,6 +472,72 @@ mod storage_shape {
             back.get("current_camera").and_then(PortValue::as_text),
             Some("cam-1"),
             "and it comes back as what it went in as"
+        );
+    }
+}
+
+#[cfg(test)]
+mod instance_keys {
+    use super::*;
+    use crate::workflows::domain::{CameraEntity, InstanceScope};
+    use crate::workflows::node::PortValue;
+    use ggraph_core::host::Host;
+
+    fn host() -> SentinelHost {
+        SentinelHost::new(crate::workflows::golden::test_ctx())
+    }
+
+    fn meta(scope: InstanceScope) -> SentinelMeta {
+        let mut m = SentinelMeta::default();
+        m.instance_scope = scope;
+        m
+    }
+
+    fn payload(camera: PortValue) -> ggraph_core::PortValues {
+        let mut legacy = crate::workflows::PortValues::new();
+        legacy.insert("camera".into(), camera);
+        super::super::compat::to_engine_values(&legacy)
+    }
+
+    /// A camera arriving as an ENTITY keys the same instance as one arriving as an ip.
+    ///
+    /// The wire carries both, depending on whether the event payload has been seeded yet, and a
+    /// window can be armed on either side of that. Reading only the text form answered "" for the
+    /// entity, so a per-camera graph armed under one key and looked under another — and a window
+    /// that closes without finding what armed it looks exactly like a window that never armed.
+    #[test]
+    fn a_camera_keys_the_same_instance_however_it_arrived() {
+        let h = host();
+        let m = meta(InstanceScope::PerCamera);
+
+        let as_text = h.instance_key(&m, &payload(PortValue::Text("cam-1".into())));
+        let as_entity = h.instance_key(
+            &m,
+            &payload(PortValue::Camera(CameraEntity {
+                id: "cam-1".into(),
+                ip: "10.0.0.7".into(),
+                name: "Front door".into(),
+            })),
+        );
+
+        assert_eq!(as_text, "cam-1");
+        assert_eq!(
+            as_entity, as_text,
+            "an entity and an ip name the same camera, so they must name the same instance"
+        );
+    }
+
+    /// A single-instance graph has one instance, whatever the payload says.
+    #[test]
+    fn a_graph_that_is_not_per_camera_has_one_instance() {
+        let h = host();
+        let key = h.instance_key(
+            &meta(InstanceScope::Single),
+            &payload(PortValue::Text("cam-1".into())),
+        );
+        assert_eq!(
+            key, "",
+            "the single instance is the empty key, byte for byte"
         );
     }
 }

@@ -26,11 +26,18 @@ pub enum Start {
 pub fn run(graph: &Graph, host: &SentinelHost, start: Start) -> Result<usize, String> {
     // The instance this run belongs to. Per-camera graphs keep one set of remembered values per
     // camera, so one camera's window cannot surface in another's.
+    //
+    // Asked of the HOST, not worked out here. The scheduler keys every piece of node state with
+    // the host's answer, so a second opinion computed alongside it is a second opinion that can
+    // disagree — and it did, silently, for a payload carrying a camera entity.
     let payload = match &start {
         Start::Whole => PortValues::new(),
         Start::At(_, p) => p.clone(),
     };
-    let instance = graph.meta.instance_scope.key_for(&payload);
+    let instance = {
+        use ggraph_core::host::Host;
+        host.instance_key(&graph.meta, &super::compat::to_engine_values(&payload))
+    };
 
     let entry = match start {
         Start::Whole => ggraph_core::Entry::default(),
