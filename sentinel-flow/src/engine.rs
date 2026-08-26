@@ -313,7 +313,7 @@ fn execute_run(
     };
 
     let host = workflows::host::SentinelHost::watching(ctx, Box::new(watcher));
-    let result = workflows::run_graph(graph, &host, start);
+    let result = workflows::run_graph(graph, &host, start).map(|outputs| outputs.len());
 
     drop(host); // closes the UI channel → its drain thread ends
     let _ = drain.join();

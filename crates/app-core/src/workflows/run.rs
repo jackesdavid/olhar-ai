@@ -18,12 +18,16 @@ pub enum Start {
     At(u32, PortValues),
 }
 
-/// Run a graph to completion and report how many nodes ran.
+/// Run a graph to completion and hand back what every node produced.
 ///
 /// The host carries everything the world-facing half needs — the tenant, the database, the
 /// observer watching, this run's variables. Errors come back as a string because that is what the
 /// run record stores.
-pub fn run(graph: &Graph, host: &SentinelHost, start: Start) -> Result<usize, String> {
+pub fn run(
+    graph: &Graph,
+    host: &SentinelHost,
+    start: Start,
+) -> Result<ggraph_core::Outputs, String> {
     // The instance this run belongs to. Per-camera graphs keep one set of remembered values per
     // camera, so one camera's window cannot surface in another's.
     //
@@ -70,7 +74,7 @@ pub fn run(graph: &Graph, host: &SentinelHost, start: Start) -> Result<usize, St
         .map_err(|e| e.to_string())?;
 
     remember(graph, host, &instance, &outputs);
-    Ok(outputs.len())
+    Ok(outputs)
 }
 
 /// Write down what each node produced, so a later run of the SAME instance can read it.

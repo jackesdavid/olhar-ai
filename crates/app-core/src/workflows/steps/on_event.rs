@@ -13,6 +13,7 @@
 //! typed ones: a camera arrives on the wire as an IP or an id and becomes a `CameraEntity`, a
 //! bbox arrives as four numbers, an image arrives base64-encoded because JSON has no byte type.
 
+use crate::workflows::domain::{Graph, GraphExt, NodeExt, NodeKind};
 use crate::workflows::host::SentinelHost;
 use crate::workflows::{compat, domain, node};
 use ggraph_core::host::Host;
@@ -42,4 +43,32 @@ impl NodeStep<SentinelHost> for OnEvent {
             .arm("exec_out")
             .logged(summary))
     }
+}
+
+pub fn on_event_node(
+    graph: &Graph,
+    event: &str,
+    event_camera: Option<&str>,
+    devices: &[crate::devices::Device],
+) -> Option<u32> {
+    graph
+        .nodes
+        .iter()
+        .find(|n| {
+            if n.kind != NodeKind::OnEvent
+                || n.config.get("event").and_then(|v| v.as_str()) != Some(event)
+            {
+                return false;
+            }
+            let Some(want_ip) = event_camera else {
+                return true;
+            }; // event has no camera concept
+            match graph.resolve_camera_selector(n) {
+                None => true, // node isn't scoped to a camera — matches any
+                Some(sel) => crate::device_actions::resolve_device(devices, &sel)
+                    .map(|idx| devices[idx].ip == want_ip)
+                    .unwrap_or(false),
+            }
+        })
+        .map(|n| n.id)
 }

@@ -192,3 +192,35 @@ pub(super) fn read_file_val(path: &str) -> Option<FileVal> {
 
 /// One node's resolved port values (inputs the engine assembles, or outputs a node returns).
 pub type PortValues = HashMap<String, PortValue>;
+
+pub(crate) fn parse_text_items(text: &str) -> Vec<PortValue> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if trimmed.starts_with('[') {
+        if let Ok(serde_json::Value::Array(arr)) =
+            serde_json::from_str::<serde_json::Value>(trimmed)
+        {
+            return arr.iter().map(json_to_port_value).collect();
+        }
+    }
+    trimmed
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| PortValue::Text(s.to_string()))
+        .collect()
+}
+
+fn json_to_port_value(v: &serde_json::Value) -> PortValue {
+    match v {
+        serde_json::Value::String(s) => PortValue::Text(s.clone()),
+        serde_json::Value::Bool(b) => PortValue::Bool(*b),
+        serde_json::Value::Number(n) => match n.as_i64() {
+            Some(i) => PortValue::Num(i),
+            None => PortValue::Text(n.to_string()), // floats: no float PortValue → text
+        },
+        other => PortValue::Text(other.to_string()),
+    }
+}
