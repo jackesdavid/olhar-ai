@@ -50,6 +50,17 @@ impl NodeStep<SentinelHost> for Display {
             });
         }
 
-        Ok(Step::default().arm("exec_out"))
+        // The Console line comes from `debug_summary`, the same place every non-cooperating node
+        // gets it, rather than being restated here. A step that returns no log writes nothing at
+        // all, and a node that stops describing itself in the Console is a node somebody debugs
+        // by adding print statements around.
+        Ok(Step::default()
+            .arm("exec_out")
+            .logged(crate::workflows::node::debug_summary(
+                self.0,
+                cx.config,
+                &crate::workflows::compat::from_engine_values(cx.inputs),
+                &Default::default(),
+            )))
     }
 }

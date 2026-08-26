@@ -93,7 +93,9 @@ async fn rename(
     let label = b.label.clone();
     let repointed = blocking(move || {
         let old = push::rename(&db, tid, id, &label)?;
-        Ok::<usize, String>(app_core::workflows::repo::rename_recipient(&db, tid, &old, &label))
+        Ok::<usize, String>(app_core::workflows::repo::rename_recipient(
+            &db, tid, &old, &label,
+        ))
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;

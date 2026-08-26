@@ -130,6 +130,10 @@ pub struct ToolContext {
     /// that ANSWERED are two separate entries in the history by design (map decision 03), and this
     /// is the only thing that joins them.
     pub run_id: uuid::Uuid,
+    /// The running graph's name, for messages a PERSON reads — a push on a lock screen, a line
+    /// in a run log. The id identifies the graph; the name is what makes a decision legible to
+    /// whoever is being asked to make it. Empty in a context with no graph.
+    pub graph_name: String,
     /// Fires cross-graph events, when something is listening. `None` in a context with no event
     /// bus — a test, a one-shot tool run — and the emitting node reports that rather than
     /// silently succeeding.
@@ -154,6 +158,7 @@ impl ToolContext {
             tenant_id,
         });
         ToolContext {
+            graph_name: String::new(),
             emitter: None,
             devices,
             db,

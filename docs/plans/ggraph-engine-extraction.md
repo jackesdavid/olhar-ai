@@ -677,3 +677,109 @@ precisa do próprio card.
 Converter um kind e deixar o scheduler daqui usando o bloco inline **é o estado correto** durante
 a migração: os dois caminhos existem, e o diferencial prova que concordam. A troca em si é o
 último passo, quando os doze estiverem convertidos e a lista de formas cobrir o que importa.
+
+
+---
+
+# A troca em si: o que ela realmente exige (2026-08-25)
+
+Os doze kinds viraram comportamentos e o diferencial concorda em **onze formas** — cadeia, ramo,
+fan-in, ramo morto profundo, switch, literais de config, laço, laço aninhado, cooldown,
+flip-flop, display. Zero exceções carregadas.
+
+Isso torna a troca possível. Mas montar as formas revelou que ela **não é trocar a chamada**.
+
+## O que o driver do bishop faz e o da engine não
+
+Quinze sítios em `engine.rs` implementam o **adiamento de reporte** (#115, #205): uma fonte pura
+ativa a cada época, inclusive em braços que ninguém tomou, então o ping dela fica retido até um
+nó que **a lê** rodar. A engine não tem nada disso — o `exec.rs` dela chama
+`node_started`/`node_finished` direto.
+
+**Trocar o scheduler sem mover isso regride o #205 e o #206**, que você acabou de verificar em
+produção.
+
+## Onde isso deve morar, e por que é melhor lá
+
+Num `Observer`, não no scheduler. Adiar um ping é decisão de **reporte**, não de execução — e o
+`SentinelHost` já recebe o observer como `Box<dyn Observer>`, então cabe sem mudar a engine.
+
+O observer precisa de conhecimento do grafo que hoje o driver tem de graça: quais nós são fontes
+puras, e quem lê cada uma. Construído por run a partir do grafo, isso é um mapa
+`nó → leitores`, e o adiamento vira: segura o ping de uma fonte pura, solta quando um leitor
+dela começa.
+
+Melhor que hoje por um motivo concreto: o scheduler deixa de saber que existe um kind chamado
+`GetVariable`.
+
+## Ordem sugerida
+
+1. `DeferringObserver` no `workflows/`, construído do grafo, com os testes do #115/#205 apontados
+   para ele em vez de para o driver.
+2. Trocar `run_dag_eventful` por `ggraph_core::run` no `sentinel-flow`.
+3. Apagar os blocos inline e os quinze sítios de adiamento do `engine.rs`.
+
+O diferencial é o portão dos três passos, e some no terceiro — quando só existe um scheduler, não
+há o que comparar.
+
+---
+
+# A troca, feita (2026-08-25)
+
+Passos 1 e 2 concluídos. **Todo run de produção — manual, cron, entrega de evento, re-entrada de
+temporizador — passa por `ggraph_core::run`.** O driver deste produto continua a existir e a ser
+testado, mas ninguém o chama fora do diferencial que prova que os dois concordam.
+
+## O que a troca custou de verdade
+
+Não foi o call site. Foram três coisas que o driver fazia e a engine não sabia fazer, e **nenhuma
+delas falharia alto**:
+
+**1. Braços de nós engine-driven nunca eram reportados.** O driver anuncia um braço num único
+lugar, o caminho do `run_node`. ForEach, Cooldown e FlipFlop marcam os seus braços vivos
+directamente e não avisam ninguém — portanto `loop_body`, `completed` e o `exec_out` do Cooldown
+nunca chegam ao editor, e **a aresta que sai do corpo de um laço não acende de todo**. É o #206
+outra vez, na metade do grafo que a correcção não alcançou. A engine reporta todos; a troca
+fecha isto. Está registado em `DRIVER_MISSES_STEP_ARMS`, com a excepção deliberadamente
+unidireccional: o driver pode reportar **menos** braços que a engine, nunca um diferente.
+
+**2. Restaurar e gravar checkpoints eram a mesma bandeira.** A borda de fecho de um `DelayTrigger`
+dispara de um temporizador sem payload próprio; a única maneira de ver o `camera` ou o `clip_id`
+que o run que armou a janela viu é reler o que esse run produziu. A engine já sabia restaurar, mas
+recusava a menos que também estivesse a gravar checkpoints — e o Sentinel quer exactamente o
+contrário: lembrar o último valor de cada nó para sempre (o editor lê-os), sem nada escrito ou
+apagado a meio. `Entry::restore` (engine v0.12.0) passa a fazer a pergunta directamente.
+
+**3. Nada era gravado.** `remember()` no `workflows/run.rs` escreve o que cada nó produziu. Só nós
+que **correram** e produziram alguma coisa — é isso que mantém um re-trigger correcto: um
+re-trigger não acende nada, logo `StartRecording` não corre, logo o `clip_id` do run que armou
+sobrevive enquanto a câmara refresca.
+
+## O que ficou provado, e como
+
+O diferencial passou de 11 para 14 formas e ganhou duas dimensões:
+
+- **sub-runs**, que estavam fora do oráculo por completo. Toda forma entrava pela porta da frente,
+  mas uma entrega de `OnEvent` e uma re-entrada de `DelayTrigger` começam **num nó** com payload.
+  É também a forma onde um scheduler que trata "sem braço vivo a entrar" como "morto" mata o
+  próprio nó de entrada;
+- **braços**, comparados ao lado dos nós. Quais nós correram diz o que aconteceu; por que braço o
+  controlo saiu diz como lá chegou, e é isso que o editor desenha.
+
+O `DeferringObserver` tem testes próprios, dirigidos à mão, sem scheduler nenhum — o contrato do
+#115/#205 deixou de estar amarrado a um driver que vai desaparecer.
+
+## Passo 3: por fazer, e de propósito
+
+Apagar o `engine.rs` (2672 linhas) é o maior ganho de legibilidade que resta. **Fica para depois
+do teste em produção.** Enquanto os dois schedulers existem, o diferencial é a prova de que
+concordam e o driver é o caminho de volta; apagá-lo agora seria deitar fora a rede de segurança na
+véspera de precisar dela.
+
+Ordem quando a troca estiver confirmada ao vivo:
+
+1. apagar `engine.rs` e o `differential.rs` (some com ele — sem dois schedulers não há o que
+   comparar);
+2. `repo.rs` (1610 linhas de SQL) + as 12 migrações da engine → um adaptador `ggraph-pg`;
+3. #207 — o Time Gate a não segurar uma thread; continua a precisar de uma decisão sua, porque
+   muda quando o `out` dispara e parte o histórico de runs.

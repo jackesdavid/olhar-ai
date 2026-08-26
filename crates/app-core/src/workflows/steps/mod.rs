@@ -11,6 +11,8 @@
 //! into an agreement.
 
 pub mod cooldown;
+pub mod delay_trigger;
+pub mod device_gate;
 pub mod display;
 pub mod emit_event;
 pub mod flip_flop;

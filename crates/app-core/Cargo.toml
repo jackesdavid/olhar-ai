@@ -8,7 +8,7 @@ description = "Bishop's UI-agnostic logic, copied for the web app (parallel to t
 # The graph engine, now its own repo and shared with Redoma (card #204). Pinned by TAG, not by
 # branch: with a branch the lockfile is the only pin, and a stray `cargo update` would move both
 # consumers at once. Public over HTTPS, so no credential in any CI job.
-ggraph-core = { git = "https://github.com/jackesdavid/graph-engine.git", tag = "v0.9.3" }
+ggraph-core = { git = "https://github.com/jackesdavid/graph-engine.git", tag = "v0.15.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # ONVIF camera support (copied from the ratatui src/onvif): blocking HTTP +

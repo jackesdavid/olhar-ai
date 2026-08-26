@@ -150,18 +150,19 @@ async fn diagnose(
     let db = st.db.clone();
     let d = blocking(move || -> Result<tuya::Diagnosis, String> {
         let cfg = match (b.access_id, b.access_key) {
-            (Some(id), Some(key)) if !id.trim().is_empty() && !key.trim().is_empty() => TuyaConfig {
-                access_id: id.trim().to_string(),
-                access_key: key.trim().to_string(),
-                endpoint: normalise_endpoint(b.endpoint.as_deref()),
-                console_project_id: None,
-                console_region: None,
-            },
+            (Some(id), Some(key)) if !id.trim().is_empty() && !key.trim().is_empty() => {
+                TuyaConfig {
+                    access_id: id.trim().to_string(),
+                    access_key: key.trim().to_string(),
+                    endpoint: normalise_endpoint(b.endpoint.as_deref()),
+                    console_project_id: None,
+                    console_region: None,
+                }
+            }
             // No credentials in the request: diagnose what is saved. `resolve_config` is the one
             // resolver (see the module header) — do not read the table directly here.
-            _ => tuya::repo::resolve_config(&db, tid).ok_or(
-                "Tuya is not connected — add your Tuya project credentials first.",
-            )?,
+            _ => tuya::repo::resolve_config(&db, tid)
+                .ok_or("Tuya is not connected — add your Tuya project credentials first.")?,
         };
         let uids = tuya::repo::linked_uids(&db, tid);
         Ok(tuya::diagnose(&cfg, &uids))

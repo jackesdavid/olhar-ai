@@ -261,8 +261,19 @@ fn execute_run(
     }
     let graph_id = graph.id;
     let debug = graph.meta.debug;
-    let labels: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node"))).collect();
+    let labels: std::collections::HashMap<u32, &'static str> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.id,
+                n.kind
+                    .as_kind()
+                    .map(|k| k.label())
+                    .unwrap_or("unknown node"),
+            )
+        })
+        .collect();
     // Owned, not `&'static str`: a kind's slug now comes from the stored document rather than
     // from an enum, and a document can name a kind this build does not have a constant for.
     let slugs: std::collections::HashMap<u32, String> = graph
@@ -270,114 +281,48 @@ fn execute_run(
         .iter()
         .map(|n| (n.id, n.kind.as_str().to_string()))
         .collect();
-    let logs = std::rc::Rc::new(std::cell::RefCell::new(Vec::<RunLogLine>::new()));
+    let logs = Arc::new(Mutex::new(Vec::<RunLogLine>::new()));
 
-    let prog = Arc::clone(state);
-    let node_logs = logs.clone();
-    let node_labels = labels.clone();
-    let node_slugs = slugs.clone();
-    let mut on_node = |nid: u32| {
-        let snapshot = {
-            let mut a = prog.activity.lock().unwrap();
-            let e = a.entry((tenant, graph_id)).or_default();
-            e.current = Some(nid);
-            e.clone()
-        };
-        publish_activity(&prog, tenant, graph_id, &snapshot);
-        events::publish(
-            &prog.events,
-            "workflow-node",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "run_id": run_id }),
-        );
-        if debug {
-            node_logs.borrow_mut().push(RunLogLine {
-                node_id: Some(nid),
-                label: node_labels.get(&nid).map(|s| s.to_string()),
-                kind: "node".into(),
-                node_kind: node_slugs.get(&nid).map(|s| s.to_string()),
-                message: node_labels.get(&nid).copied().unwrap_or("node").to_string(),
-            });
-        }
-    };
-    // An exec arm fired: the only signal that says WHICH edge control travelled along. The
-    // editor lights an edge from its own (from, from_port); without this it lights every edge
-    // into a live node, which is right by accident until two branches converge on one (#206).
-    let arm_prog = Arc::clone(&prog);
-    let mut on_arm = |nid: u32, port: &str| {
-        events::publish(
-            &arm_prog.events,
-            "workflow-arm",
-            serde_json::json!({
-                "tenant": tenant, "graph": graph_id, "node": nid,
-                "port": port, "run_id": run_id
-            }),
-        );
+    // Everything the run reports to a person goes through one observer.
+    //
+    // It used to be four closures handed to this product's own scheduler. As closures they could
+    // only ever be handed to THAT scheduler; as an Observer they are handed to whichever one is
+    // running, which is what lets the engine's scheduler drive a real Sentinel run.
+    let watcher = FlowObserver {
+        state: Arc::clone(state),
+        tenant,
+        graph_id,
+        run_id,
+        debug,
+        labels,
+        slugs,
+        logs: Arc::clone(&logs),
+        ui: workflows::host::UiObserver::new(ctx.ui_tx.clone()),
     };
 
-    let log_state = Arc::clone(state);
-    let log_logs = logs.clone();
-    let mut on_log = |nid: u32, msg: &str, ms: u128| {
-        let label = labels.get(&nid).copied().unwrap_or("node");
-        let slug = slugs.get(&nid).cloned().unwrap_or_default();
-        events::publish(
-            &log_state.events,
-            "workflow-log",
-            serde_json::json!({ "tenant": tenant, "graph": graph_id, "node": nid, "label": label, "node_kind": slug, "message": msg, "ms": ms as u64, "run_id": run_id }),
-        );
-        log_logs.borrow_mut().push(RunLogLine {
-            node_id: Some(nid),
-            label: Some(label.to_string()),
-            kind: "log".into(),
-            node_kind: Some(slug.to_string()),
-            message: msg.to_string(),
-        });
-    };
-    let emit_state = Arc::clone(state);
-    let emit_name = graph.name.clone();
-    let mut emit = |ev: &str, payload: &PortValues| {
-        // Graph-emitted event; the listener count is only actionable for durable inbound events
-        // (see the consumer), so discard it here.
-        let _ = fire_event(
-            &emit_state,
-            tenant,
-            EventSource::Graph {
-                id: graph_id,
-                name: emit_name.clone(),
-            },
-            ev.to_string(),
-            Some(run_id),
-            payload.clone(),
-        );
+    // Wrapped, because a pure source activates on every epoch whether or not the branch it feeds
+    // was ever reached, and one that nobody read has no business writing a line or lighting up
+    // (#115, #205). The rule lives in the wrapper so it holds under either scheduler.
+    let watcher = app_core::workflows::observer::DeferringObserver::new(graph, watcher, |n| {
+        n.kind.as_kind().is_some_and(|k| k.is_pure_source())
+    });
+
+    let start = match entry {
+        Some(at) => workflows::Start::At(at, entry_payload),
+        None => workflows::Start::Whole,
     };
 
-    let result = match entry {
-        Some(e) => workflows::run_subpath_eventful(
-            graph,
-            &ctx,
-            e,
-            entry_payload,
-            &mut on_node,
-            &mut on_arm,
-            &mut on_log,
-            &mut emit,
-        ),
-        None => workflows::run_dag_eventful(
-            graph,
-            &ctx,
-            &mut on_node,
-            &mut on_arm,
-            &mut on_log,
-            &mut emit,
-        ),
-    };
-    drop(ctx); // closes the UI channel → its drain thread ends
+    let host = workflows::host::SentinelHost::watching(ctx, Box::new(watcher));
+    let result = workflows::run_graph(graph, &host, start);
+
+    drop(host); // closes the UI channel → its drain thread ends
     let _ = drain.join();
 
     let (ok, summary) = match &result {
-        Ok(outs) => (true, format!("ran {} node(s)", outs.len())),
+        Ok(n) => (true, format!("ran {n} node(s)")),
         Err(e) => (false, e.clone()),
     };
-    let buffered = logs.borrow().clone();
+    let buffered = logs.lock().unwrap().clone();
     workflows::repo::insert_run_logs(&state.db, run_id, &buffered);
     // Mirror run log lines to the unified platform_logs table so the /logs page can
     // show detailed execution traces, cross-linked by trace_id = run_id.
@@ -816,6 +761,12 @@ fn build_run_context(
     // The event bus, reachable by the emitting node itself rather than through a scheduler
     // callback. `fire_event` needs this runtime's own state — the listener registry, the tenant's
     // devices for camera-scoped delivery — none of which belongs in an engine trait.
+    // What a person reads when this run asks them something. Looked up rather than threaded
+    // through the signature: the id is what identifies the graph, and only messages meant for
+    // people need the name.
+    ctx.graph_name = crate::state::find_graph(&state.store, tenant, graph_id)
+        .map(|g| g.name)
+        .unwrap_or_default();
     ctx.emitter = Some(Arc::new(BusEmitter {
         state: Arc::clone(state),
         tenant,
@@ -902,12 +853,109 @@ mod tests {
     }
 }
 
-
 /// Fires a graph's events onto this runtime's bus.
 ///
 /// The graph's NAME is resolved here rather than passed in: it is for display, and the id is
 /// what identifies the emitter. A caller holding only an id should not have to carry a label
 /// around to fire an event.
+/// What a run tells the person watching it.
+///
+/// Four different audiences, one per method, and they are not interchangeable:
+///
+/// - `node_started` → the canvas highlight, plus the live activity map that says which graph is
+///   running what right now;
+/// - `arm` → which EDGE control travelled along. Told only the destination node an editor has to
+///   guess the edge, and the guess breaks the moment two branches converge on one node (#206);
+/// - `node_finished` → a line in the Console, and a row in the run's stored log. Only when the
+///   graph has debug on: this is the gate, and it is here rather than in a scheduler because
+///   whether a line is worth writing is a fact about the product, not about execution;
+/// - `ui` → what a node produced for somebody to LOOK at, a snapshot or a printed value. Forwarded
+///   to a UiObserver rather than restated, so there is one mapping and not two.
+struct FlowObserver {
+    state: Arc<AppState>,
+    tenant: Uuid,
+    graph_id: Uuid,
+    run_id: Uuid,
+    debug: bool,
+    /// Node id → its human label, for the log line. Snapshotted before the run because the graph
+    /// is not borrowed once it starts.
+    labels: std::collections::HashMap<u32, &'static str>,
+    /// Node id → its kind slug. Owned, not `&'static str`: a kind's slug comes from the stored
+    /// document now, and a document can name a kind this build has no constant for.
+    slugs: std::collections::HashMap<u32, String>,
+    /// The run's log lines, collected here and written once at the end. Shared with the caller,
+    /// which is what reads them back out.
+    logs: Arc<Mutex<Vec<RunLogLine>>>,
+    ui: workflows::host::UiObserver,
+}
+
+impl workflows::Observer for FlowObserver {
+    fn node_started(&self, nid: u32) {
+        let snapshot = {
+            let mut a = self.state.activity.lock().unwrap();
+            let e = a.entry((self.tenant, self.graph_id)).or_default();
+            e.current = Some(nid);
+            e.clone()
+        };
+        publish_activity(&self.state, self.tenant, self.graph_id, &snapshot);
+        events::publish(
+            &self.state.events,
+            "workflow-node",
+            serde_json::json!({
+                "tenant": self.tenant, "graph": self.graph_id,
+                "node": nid, "run_id": self.run_id
+            }),
+        );
+        if self.debug {
+            self.logs.lock().unwrap().push(RunLogLine {
+                node_id: Some(nid),
+                label: self.labels.get(&nid).map(|s| s.to_string()),
+                kind: "node".into(),
+                node_kind: self.slugs.get(&nid).map(|s| s.to_string()),
+                message: self.labels.get(&nid).copied().unwrap_or("node").to_string(),
+            });
+        }
+    }
+
+    fn arm(&self, nid: u32, port: &str) {
+        events::publish(
+            &self.state.events,
+            "workflow-arm",
+            serde_json::json!({
+                "tenant": self.tenant, "graph": self.graph_id, "node": nid,
+                "port": port, "run_id": self.run_id
+            }),
+        );
+    }
+
+    fn node_finished(&self, nid: u32, msg: &str, ms: u128) {
+        if !self.debug {
+            return;
+        }
+        let label = self.labels.get(&nid).copied().unwrap_or("node");
+        let slug = self.slugs.get(&nid).cloned().unwrap_or_default();
+        events::publish(
+            &self.state.events,
+            "workflow-log",
+            serde_json::json!({
+                "tenant": self.tenant, "graph": self.graph_id, "node": nid, "label": label,
+                "node_kind": slug, "message": msg, "ms": ms as u64, "run_id": self.run_id
+            }),
+        );
+        self.logs.lock().unwrap().push(RunLogLine {
+            node_id: Some(nid),
+            label: Some(label.to_string()),
+            kind: "log".into(),
+            node_kind: Some(slug),
+            message: msg.to_string(),
+        });
+    }
+
+    fn ui(&self, node: u32, event: workflows::UiEvent) {
+        self.ui.ui(node, event);
+    }
+}
+
 struct BusEmitter {
     state: Arc<AppState>,
     tenant: Uuid,

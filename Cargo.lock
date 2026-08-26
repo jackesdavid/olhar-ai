@@ -1153,7 +1153,7 @@ dependencies = [
 [[package]]
 name = "ggraph-core"
 version = "0.1.0"
-source = "git+https://github.com/jackesdavid/graph-engine.git?tag=v0.9.3#b2bb0cb44ad3950151a2762305f7864617a2e47a"
+source = "git+https://github.com/jackesdavid/graph-engine.git?tag=v0.15.0#15d825cfc5c7f788b0ff3f43d3b18615d76bb4d7"
 dependencies = [
  "serde",
  "serde_json",

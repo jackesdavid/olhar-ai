@@ -33,6 +33,13 @@ impl NodeStep<SentinelHost> for OnEvent {
         let ports = domain::resolved_output_ports(domain::NodeKind::OnEvent, cx.config);
         let seeded = node::seed_event_payload(&payload, &ports, cx.host.tools());
 
-        Ok(Step::outputs(compat::to_engine_values(&seeded)).arm("exec_out"))
+        // The Console line comes from `debug_summary`, the same place every non-cooperating node
+        // gets it, rather than being restated here. A step that returns no log writes nothing at
+        // all, and a node that stops describing itself in the Console is a node somebody debugs
+        // by adding print statements around.
+        let summary = node::debug_summary(domain::NodeKind::OnEvent, cx.config, &payload, &seeded);
+        Ok(Step::outputs(compat::to_engine_values(&seeded))
+            .arm("exec_out")
+            .logged(summary))
     }
 }

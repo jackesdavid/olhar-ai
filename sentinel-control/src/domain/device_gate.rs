@@ -54,7 +54,9 @@ async fn pending(
 
     let owns = blocking(move || device_gate::owner_of_device(&db, device_id))
         .await?
-        .is_some_and(|(owner, dev_tenant)| dev_tenant == tid && owner.is_some() && owner == user_id);
+        .is_some_and(|(owner, dev_tenant)| {
+            dev_tenant == tid && owner.is_some() && owner == user_id
+        });
     // 404 rather than 403 for someone else's device: a caller who does not own it has no business
     // learning whether the id exists.
     if !owns {

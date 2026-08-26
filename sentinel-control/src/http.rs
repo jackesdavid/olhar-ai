@@ -146,7 +146,10 @@ fn published() -> std::collections::BTreeMap<String, PublishedArtifact> {
     match serde_json::from_str::<Manifest>(&raw) {
         Ok(m) => m.platforms,
         Err(e) => {
-            log::warn!("edge-dist manifest at {} is unreadable: {e}", path.display());
+            log::warn!(
+                "edge-dist manifest at {} is unreadable: {e}",
+                path.display()
+            );
             Default::default()
         }
     }
@@ -459,11 +462,7 @@ async fn box_tenant(st: &AppState, headers: &HeaderMap) -> Result<Option<uuid::U
     let (gs, plat, hw) = box_health_headers(headers);
     let metrics = box_metrics_header(headers);
     let hash = hex::encode(Sha256::digest(tok.as_bytes()));
-    match store::touch_box_by_token(
-        &st.pool, &hash, host, version, gs, plat, hw, metrics,
-    )
-    .await
-    {
+    match store::touch_box_by_token(&st.pool, &hash, host, version, gs, plat, hw, metrics).await {
         Ok(Some(tid)) => Ok(Some(tid)),
         Ok(None) => Err((StatusCode::UNAUTHORIZED, "unknown box token").into_response()),
         Err(e) => {
@@ -960,7 +959,9 @@ async fn face_push(
     // killing that tenant's whole face pipeline until every box updated. So an unreported
     // sharpness becomes an explicit fail-open sentinel; pose defaults to 0, which already passes
     // the `NumLte(|angle|)` direction a pose gate is written in.
-    let blur = ev.blur.unwrap_or(app_core::agent::face_quality::BLUR_UNKNOWN);
+    let blur = ev
+        .blur
+        .unwrap_or(app_core::agent::face_quality::BLUR_UNKNOWN);
     let mut payload = serde_json::json!({
         "camera": ev.camera_ip,
         "bbox": ev.bbox, // already xyxy

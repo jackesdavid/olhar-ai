@@ -46,7 +46,10 @@ struct SettingsReq {
 
 /// The tenant's settings. `{}` when nothing has been chosen — absent means "not chosen", never a
 /// default, so the caller can tell the difference.
-async fn read(UserClaims(c): UserClaims, State(st): State<AppState>) -> Result<Json<Value>, ApiErr> {
+async fn read(
+    UserClaims(c): UserClaims,
+    State(st): State<AppState>,
+) -> Result<Json<Value>, ApiErr> {
     auth::require(&c, "settings.read")?;
     let tid = tenant_of(&c)?;
     let settings = store::tenant_settings(&st.pool, tid)

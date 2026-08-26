@@ -116,7 +116,8 @@ fn referencing_workflows(db: &app_core::db::Db, tid: Uuid, dict_id: Uuid) -> Vec
     workflows::repo::load(db, tid)
         .into_iter()
         .filter(|g| {
-            g.meta.variables
+            g.meta
+                .variables
                 .iter()
                 .any(|v| v.ty == types::TABLE && v.default.as_deref() == Some(needle.as_str()))
         })

@@ -6,6 +6,147 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-25 (later) — production runs on the engine's scheduler, and the files got readable
+
+- **Branch:** `feat/204-steps-durable` → !145. Engine at `v0.13.0`, pinned by tag.
+- **Commits:** `d17fb6f` (DeferringObserver) · `99e2d8b` (differential: sub-runs + arms) ·
+  `ef205dc` (the swap) · `c245398` `9507e98` `ff55a00` (domain, node, vision split).
+
+### Done
+
+**Every production run now goes through `ggraph_core::run`** — manual, cron, event delivery, timer
+re-entry. This product's driver still exists and is still tested, but nothing calls it outside the
+differential suite that proves the two agree.
+
+The deferral of pure sources (#115, #205) moved out of the scheduler into a `DeferringObserver`,
+which is where it belonged: holding back a ping is a decision about REPORTING, not execution. Its
+tests drive it by hand with no scheduler at all, so the contract survives the driver it was
+written against.
+
+**Three things the swap needed that nothing would have failed loudly about:**
+
+1. **Engine-driven nodes never reported their arms.** The driver announces an arm in one place —
+   the `run_node` path. ForEach, Cooldown and FlipFlop mark theirs live directly and tell nobody,
+   so `loop_body`, `completed` and a Cooldown's `exec_out` never reach the editor and **the edge
+   out of a loop body does not light at all**. #206 again, in the half its fix never reached. The
+   engine reports all of them.
+2. **Restoring and checkpointing were one flag.** A `DelayTrigger`'s trailing edge fires from a
+   timer with no payload; the only way it sees the arming run's `camera` is to reread what that
+   run produced. The engine could restore but refused unless it was also writing checkpoints —
+   the opposite of what Sentinel wants. `Entry::restore` (v0.12.0) asks directly.
+3. **Nothing was written.** `remember()` in `workflows/run.rs` writes what each node produced —
+   only nodes that RAN and produced something, which is what keeps a re-trigger correct.
+
+**Seven silent regressions, all one family.** Found by sweeping for the class after the third,
+not by luck. The shared shape: **two implementations of one rule — one used by the driver, one by
+the new path.** None of them errored.
+
+| | what broke | how it would show |
+|---|---|---|
+| 1 | values written without the `{"<node>": …}` envelope | a window closes and recognises nothing |
+| 2 | variables in the wrong column, read by `values_json["__variables"]` that nothing writes | #114 returns; the restore is always empty |
+| 3 | `instance_key` took a camera only as text, not as an entity | arms under `cam-1`, looks under `""` |
+| 4 | the timeout declared from an EMPTY configuration | a node set to sixty seconds dies at fifteen |
+| 5 | `run_orphans` read by the old driver alone | a forgotten node on the canvas **sends** the notification |
+| 6 | the `Legacy` adapter never implemented `summary` | the Console loses its detail and keeps printing |
+| 7 | Display / ShowImage / OnEvent returned no log | those three go silent in the Console |
+
+The durable defence is the **differential comparing three dimensions** over fifteen shapes: which
+nodes ran, which arm control left by, and the line a person reads. It compared only the first
+before — and each new dimension caught at least one of these.
+
+Method note worth keeping: the timeout test written that same hour **went on passing** after its
+node stopped running, because a run with nothing to run returns `Ok`. A test asserting only "it did
+not fail" stops testing the moment its subject stops executing.
+
+A PRE-EXISTING trap found in passing and left alone: a node that overruns its timeout is abandoned
+and its thread holds a clone of the context, so the UI channel never closes and `drain.join()`
+blocks. The old driver did exactly the same, so it is not a regression — but it is real.
+
+
+**Reorganisation.** `domain.rs` (3147) → seven files; `node.rs` (1944) → five plus its families;
+`vision.rs` (1060) → five. In the engine: `exec.rs` → four, `spec.rs` → four, and twelve loose
+root modules → six folders (`data`, `graph`, `exec`, `spec`, `host`, `nodes`). No path changed
+anywhere — re-exports carry them — and 151 workflow tests pass throughout.
+
+### Pending
+
+- **The live test.** Nothing has run in production on the engine's scheduler yet. Watch a graph
+  with a branch, a loop and a DelayTrigger window: the Console lines, the canvas highlights, and
+  above all a window that closes and still sees its camera.
+- **`engine.rs` (2672 lines) stays until that passes.** It is the way back and it is the oracle;
+  deleting it now would throw away the safety net the night before needing it. `differential.rs`
+  goes with it.
+- `repo.rs` (1610 lines of SQL) + the twelve engine migrations → a `ggraph-pg` adapter.
+- **#207** — the Time Gate holding a thread. Still needs a decision: it changes when `out` fires
+  and splits run history.
+
+---
+
+## 2026-08-25 — the node set becomes engine behaviours, twelve of twelve
+
+- **Branch:** `feat/204-steps-durable` → !145, CI running when this was written. Everything
+  before it is merged: !141 through !144.
+- **Commits:** `114babf` (NodeId + Graph<SentinelMeta>) · `16e6769` (display + emit + OnEvent) ·
+  `2816efe` (DelayTrigger) · `ea39647` (DeviceGate).
+- **Engine:** `v0.9.3`, pinned by tag. Nine releases today, every one from a real difference a
+  consumer hit rather than from speculation.
+
+### Done
+
+**The big slice that was reverted yesterday, landed.** `NodeKind` → `NodeId`, `Graph<SentinelMeta>`
+and `GraphNode`, all in one — because they are one change, not three. What made it an afternoon
+instead of a rewrite was three impls written FIRST and compiling on their own:
+`PartialEq<NodeKind> for NodeId` both ways, `From<NodeKind> for NodeId`, and an `AsKind` trait
+returning `Option`. The enum becomes a VIEW over the open identifier, so `n.kind == NodeKind::If`
+reads the way it always did at all sixteen sites, untouched.
+
+**All twelve inline node kinds are engine behaviours now** (`workflows/steps/`, one file each),
+bar `TimeGate` which is #207 and needs a decision. Both schedulers still exist, which is the
+correct state: `workflows/differential.rs` runs the same graph through both and requires the same
+node sequence. **Six shapes agree with `KNOWN_DIFFERENCES` empty.**
+
+**#205 and #206 verified in production** by the reporter, on their own graph.
+
+**#197 widened twice:** the cleanup was taking the Docker BUILD CACHE with the images (build:rust
+went 24 → 43 min, `Build Cache 0B` after every run — now `image prune` plus
+`builder prune --filter until=168h`), and the daemon died once with 24 GiB free, which produces
+the same wall of red as a full disk.
+
+### State
+
+139 tests, workspace clean, edge compiles, both lockfiles current. The catalog snapshot is
+UNTOUCHED across the whole session; the golden documents changed only in field ORDER, verified
+key-by-key (jsonb normalises order, the editor reads by key).
+
+In production: the extraction, #205, #206, Tauri iOS, engine v0.9.0. NOT yet: !145.
+
+### Pending / next
+
+1. **Merge !145** once CI is green (DelayTrigger + DeviceGate).
+2. **The scheduler swap** — `run_dag_eventful` → `ggraph_core::run`. Only possible now. Extend
+   the differential shape list first, then swap, then delete the inline blocks.
+3. **#207 TimeGate** — needs a decision, see Blockers.
+4. `repo.rs` and the 12 engine-owned migrations → a `ggraph-pg` adapter.
+
+### Blockers
+
+**#207 is a decision, not a task.** TimeGate spawns a thread that polls the database every 250 ms
+for its whole window. `DelayTrigger` has the same shape and uses a `work_jobs` row with
+`run_after`, the trailing edge arriving as a new run. Converting TimeGate means `out` stops firing
+in the same run and fires in a new one: run history splits, and **run-scoped variables do not
+survive** — that was #114, and the fix was a whole snapshot/restore mechanism which now lives in
+`steps/delay_trigger.rs` and can be copied. All three consequences are ones DelayTrigger already
+lives with, so none are hypothetical. Somebody still has to agree to them.
+
+### Refs
+
+`docs/ref/workflows.md`, `docs/plans/ggraph-engine-extraction.md`,
+`docs/plans/time-gate-should-not-hold-a-thread.md`, `docs/plans/disk-exhaustion-breaks-everything.md`,
+`crates/app-core/src/workflows/{steps/,differential.rs,registry.rs,host.rs,compat.rs}`.
+
+---
+
 ## 2026-08-24 — the graph engine leaves home, and bishop starts consuming it
 
 - **Branch:** `docs/handoff-engine-extraction` (this entry). Everything else is **merged to

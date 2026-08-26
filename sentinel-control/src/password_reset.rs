@@ -43,7 +43,10 @@ fn app_origin() -> String {
 /// The language to write to a user in — `users.locale`, English when unset (every account created
 /// before the column existed). A failed lookup is English too: an email in a plausible language
 /// always beats no email, and this is the locked-out path.
-async fn user_lang(pool: &sqlx::PgPool, user_id: uuid::Uuid) -> app_core::notification::templates::Lang {
+async fn user_lang(
+    pool: &sqlx::PgPool,
+    user_id: uuid::Uuid,
+) -> app_core::notification::templates::Lang {
     let tag: Option<String> = sqlx::query_scalar("SELECT locale FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(pool)
@@ -193,21 +196,16 @@ pub async fn confirm(
         return Err(bad_link());
     }
 
-    let password_hash = auth::hash_password(&b.password)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let password_hash =
+        auth::hash_password(&b.password).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let now_unix = chrono::Utc::now().timestamp();
-    let changed = store::set_password_and_revoke(
-        &st.pool,
-        tenant_id,
-        user_id,
-        &password_hash,
-        now_unix,
-    )
-    .await
-    .map_err(|e| {
-        log::error!("password reset: set_password failed for {user_id}: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "try again".to_string())
-    })?;
+    let changed =
+        store::set_password_and_revoke(&st.pool, tenant_id, user_id, &password_hash, now_unix)
+            .await
+            .map_err(|e| {
+                log::error!("password reset: set_password failed for {user_id}: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "try again".to_string())
+            })?;
     if changed == 0 {
         return Err(bad_link());
     }
@@ -223,7 +221,9 @@ pub async fn confirm(
     // Tell the account holder it happened. This mail exists for one reader — the person whose
     // account was just taken — and is worth sending even though everyone else deletes it.
     if let Ok(Some(user)) = store::find_user_by_id(&st.pool, user_id).await {
-        let when = chrono::Utc::now().format("%e %B %Y at %H:%M UTC").to_string();
+        let when = chrono::Utc::now()
+            .format("%e %B %Y at %H:%M UTC")
+            .to_string();
         let lang = user_lang(&st.pool, user_id).await;
         let mail = app_core::notification::templates::password_changed(
             &user.email,
@@ -282,9 +282,18 @@ mod tests {
         let future = (chrono::Utc::now() + chrono::Duration::minutes(30))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        assert!(past.as_str() <= now.as_str(), "an expired token must read as expired");
-        assert!(future.as_str() > now.as_str(), "a live token must read as live");
-        assert!(future.ends_with('Z') && now.ends_with('Z'), "both sides must be UTC 'Z'");
+        assert!(
+            past.as_str() <= now.as_str(),
+            "an expired token must read as expired"
+        );
+        assert!(
+            future.as_str() > now.as_str(),
+            "a live token must read as live"
+        );
+        assert!(
+            future.ends_with('Z') && now.ends_with('Z'),
+            "both sides must be UTC 'Z'"
+        );
     }
 
     #[test]
