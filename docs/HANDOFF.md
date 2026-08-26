@@ -6,6 +6,56 @@ changed, branch/commits, state, what's pending, blockers. Deep per-area detail l
 
 ---
 
+## 2026-08-25 (later) — production runs on the engine's scheduler, and the files got readable
+
+- **Branch:** `feat/204-steps-durable` → !145. Engine at `v0.13.0`, pinned by tag.
+- **Commits:** `d17fb6f` (DeferringObserver) · `99e2d8b` (differential: sub-runs + arms) ·
+  `ef205dc` (the swap) · `c245398` `9507e98` `ff55a00` (domain, node, vision split).
+
+### Done
+
+**Every production run now goes through `ggraph_core::run`** — manual, cron, event delivery, timer
+re-entry. This product's driver still exists and is still tested, but nothing calls it outside the
+differential suite that proves the two agree.
+
+The deferral of pure sources (#115, #205) moved out of the scheduler into a `DeferringObserver`,
+which is where it belonged: holding back a ping is a decision about REPORTING, not execution. Its
+tests drive it by hand with no scheduler at all, so the contract survives the driver it was
+written against.
+
+**Three things the swap needed that nothing would have failed loudly about:**
+
+1. **Engine-driven nodes never reported their arms.** The driver announces an arm in one place —
+   the `run_node` path. ForEach, Cooldown and FlipFlop mark theirs live directly and tell nobody,
+   so `loop_body`, `completed` and a Cooldown's `exec_out` never reach the editor and **the edge
+   out of a loop body does not light at all**. #206 again, in the half its fix never reached. The
+   engine reports all of them.
+2. **Restoring and checkpointing were one flag.** A `DelayTrigger`'s trailing edge fires from a
+   timer with no payload; the only way it sees the arming run's `camera` is to reread what that
+   run produced. The engine could restore but refused unless it was also writing checkpoints —
+   the opposite of what Sentinel wants. `Entry::restore` (v0.12.0) asks directly.
+3. **Nothing was written.** `remember()` in `workflows/run.rs` writes what each node produced —
+   only nodes that RAN and produced something, which is what keeps a re-trigger correct.
+
+**Reorganisation.** `domain.rs` (3147) → seven files; `node.rs` (1944) → five plus its families;
+`vision.rs` (1060) → five. In the engine: `exec.rs` → four, `spec.rs` → four, and twelve loose
+root modules → six folders (`data`, `graph`, `exec`, `spec`, `host`, `nodes`). No path changed
+anywhere — re-exports carry them — and 151 workflow tests pass throughout.
+
+### Pending
+
+- **The live test.** Nothing has run in production on the engine's scheduler yet. Watch a graph
+  with a branch, a loop and a DelayTrigger window: the Console lines, the canvas highlights, and
+  above all a window that closes and still sees its camera.
+- **`engine.rs` (2672 lines) stays until that passes.** It is the way back and it is the oracle;
+  deleting it now would throw away the safety net the night before needing it. `differential.rs`
+  goes with it.
+- `repo.rs` (1610 lines of SQL) + the twelve engine migrations → a `ggraph-pg` adapter.
+- **#207** — the Time Gate holding a thread. Still needs a decision: it changes when `out` fires
+  and splits run history.
+
+---
+
 ## 2026-08-25 — the node set becomes engine behaviours, twelve of twelve
 
 - **Branch:** `feat/204-steps-durable` → !145, CI running when this was written. Everything
