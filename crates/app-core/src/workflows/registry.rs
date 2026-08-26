@@ -169,12 +169,13 @@ fn exec_out_for(k: NodeKind, purity: Purity) -> ExecOut {
 }
 
 fn timeout_for(k: NodeKind) -> Timeout {
-    // `node_timeout` reads the per-node override out of config; the registry declares the
-    // default, so it is asked with an empty one.
-    match node::node_timeout(k, &Json::Object(Default::default())) {
-        Some(d) => Timeout::Secs(d.as_secs().max(1)),
-        None => Timeout::Inline,
-    }
+    // Asked with the node's REAL configuration, at the moment it runs.
+    //
+    // This used to hand `node_timeout` an empty object, because a spec could only declare a
+    // constant. That threw away the per-node `timeout_secs` a person had typed — so a slow
+    // endpoint set to wait sixty seconds got the kind's default instead, and failed on exactly
+    // the requests it had been configured to wait for.
+    Timeout::from_config(move |cfg: &Json| node::node_timeout(k, cfg).map(|d| d.as_secs().max(1)))
 }
 
 fn aliases_for(k: NodeKind) -> &'static [&'static str] {
@@ -293,5 +294,46 @@ mod tests {
         expected.sort_unstable();
         got.sort_unstable();
         assert_eq!(got, expected, "the routing set drifted");
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    /// A per-node `timeout_secs` reaches the scheduler.
+    ///
+    /// The registry used to declare each kind's timeout from an EMPTY configuration, because a
+    /// spec could only hold a constant. Everything a person typed into a node was discarded on the
+    /// way, and the symptom was a node failing on precisely the slow calls it had been given more
+    /// time for.
+    #[test]
+    fn a_node_gets_the_time_its_own_configuration_asks_for() {
+        let reg = registry();
+        let spec = reg.resolve("http_post").expect("registered");
+
+        let default = spec.timeout.resolve(&NodeKind::HttpPost.default_config());
+        let generous = spec
+            .timeout
+            .resolve(&serde_json::json!({ "timeout_secs": "60" }));
+
+        assert_eq!(generous, Some(60), "what the person typed is what it gets");
+        assert_ne!(
+            generous, default,
+            "and it differs from the default, or this test proves nothing"
+        );
+    }
+
+    /// A node that declared it cannot block still runs inline, whatever is in its configuration.
+    #[test]
+    fn a_pure_node_stays_inline() {
+        let reg = registry();
+        let spec = reg.resolve("num_gte").expect("registered");
+        assert_eq!(
+            spec.timeout
+                .resolve(&serde_json::json!({ "timeout_secs": "60" })),
+            None,
+            "arithmetic does not get a supervising thread for asking"
+        );
     }
 }
