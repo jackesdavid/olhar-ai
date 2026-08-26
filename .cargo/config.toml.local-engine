@@ -1,0 +1,13 @@
+# Build against the LOCAL engine checkout instead of the published tag.
+#
+#     cp .cargo/config.toml.local-engine .cargo/config.toml
+#
+# Why this is a file you copy rather than the default: with it in place, this repo and CI compile
+# DIFFERENT code. That is exactly what you want while iterating on the engine — change it, build
+# bishop, no tag, no release — and exactly what you do not want when deciding whether something
+# is ready to ship. CI has no `graph-engine/` directory and always uses the tag.
+#
+# Delete `.cargo/config.toml` before trusting a green build, and bump the tag in
+# crates/app-core/Cargo.toml when the engine change is real.
+[patch."https://github.com/jackesdavid/graph-engine.git"]
+ggraph-core = { path = "graph-engine/ggraph-core" }

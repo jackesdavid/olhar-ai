@@ -55,3 +55,14 @@ experiments/gst-spike/Cargo.lock
 # xcarchive is hundreds of MB — the shell's source of truth is src-tauri/{Cargo.toml,tauri.conf.json,src}.
 sentinel-app/src-tauri/gen/
 sentinel-app/src-tauri/target/
+
+# The graph engine is its OWN repository (github.com/jackesdavid/graph-engine), checked out here
+# only so both trees are open side by side. It is consumed by TAG, never by path — see
+# crates/app-core/Cargo.toml. Ignored so its files can never be committed into this repo, which
+# would quietly undo the extraction.
+/graph-engine/
+
+# The local-engine override (see .cargo/config.toml.local-engine). Ignored because with it in
+# place, this repo and CI compile different code — that is a deliberate, temporary state, not
+# something to share.
+/.cargo/config.toml
