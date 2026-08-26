@@ -37,6 +37,33 @@ written against.
 3. **Nothing was written.** `remember()` in `workflows/run.rs` writes what each node produced —
    only nodes that RAN and produced something, which is what keeps a re-trigger correct.
 
+**Seven silent regressions, all one family.** Found by sweeping for the class after the third,
+not by luck. The shared shape: **two implementations of one rule — one used by the driver, one by
+the new path.** None of them errored.
+
+| | what broke | how it would show |
+|---|---|---|
+| 1 | values written without the `{"<node>": …}` envelope | a window closes and recognises nothing |
+| 2 | variables in the wrong column, read by `values_json["__variables"]` that nothing writes | #114 returns; the restore is always empty |
+| 3 | `instance_key` took a camera only as text, not as an entity | arms under `cam-1`, looks under `""` |
+| 4 | the timeout declared from an EMPTY configuration | a node set to sixty seconds dies at fifteen |
+| 5 | `run_orphans` read by the old driver alone | a forgotten node on the canvas **sends** the notification |
+| 6 | the `Legacy` adapter never implemented `summary` | the Console loses its detail and keeps printing |
+| 7 | Display / ShowImage / OnEvent returned no log | those three go silent in the Console |
+
+The durable defence is the **differential comparing three dimensions** over fifteen shapes: which
+nodes ran, which arm control left by, and the line a person reads. It compared only the first
+before — and each new dimension caught at least one of these.
+
+Method note worth keeping: the timeout test written that same hour **went on passing** after its
+node stopped running, because a run with nothing to run returns `Ok`. A test asserting only "it did
+not fail" stops testing the moment its subject stops executing.
+
+A PRE-EXISTING trap found in passing and left alone: a node that overruns its timeout is abandoned
+and its thread holds a clone of the context, so the UI channel never closes and `drain.join()`
+blocks. The old driver did exactly the same, so it is not a regression — but it is real.
+
+
 **Reorganisation.** `domain.rs` (3147) → seven files; `node.rs` (1944) → five plus its families;
 `vision.rs` (1060) → five. In the engine: `exec.rs` → four, `spec.rs` → four, and twelve loose
 root modules → six folders (`data`, `graph`, `exec`, `spec`, `host`, `nodes`). No path changed
