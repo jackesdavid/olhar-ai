@@ -10,9 +10,11 @@ editor is `sentinel-app/src/routes/workflows/+page.svelte` (catalog-driven from 
 with a second product. Card **#204**, plan note
 [ggraph-engine-extraction](../plans/ggraph-engine-extraction.md). What already comes from there:
 typed ports (`PortType`, `Port`, `PortName`), `Edge`, the wire-compatibility rule, and the **node
-registry** that the catalog and wire validation read. What is still local:
-`crates/app-core/src/workflows/{engine.rs, node.rs, repo.rs}` — the scheduler, the per-kind
-implementations and the Postgres persistence.
+registry** that the catalog and wire validation read — **and the scheduler**: every production run
+goes through `ggraph_core::run`. What is still local:
+`crates/app-core/src/workflows/{node/, repo.rs}` — the per-kind implementations and the Postgres
+persistence. `engine.rs` is this product's old scheduler, kept as the differential's other half
+until the swap is confirmed live.
 
 Three things not to rediscover:
 
@@ -294,11 +296,21 @@ sent for `tuya_control`; it replaces instead, or the fix would have drawn two.
 ForEach, Cooldown, FlipFlop, Comment, Text/Gauge, ShowImage, EmitEvent, OnEvent, DelayTrigger,
 DeviceGate. Only `TimeGate` is outside, deliberately — see #207, it changes when `out` fires.
 
-Both schedulers still exist and that is the CORRECT state during the migration: this product's
-`engine.rs` keeps its inline blocks, the registry carries the converted behaviours, and
-`workflows/differential.rs` runs the same graph through both and requires the same node sequence.
-Six shapes agree with `KNOWN_DIFFERENCES` empty — chain, branch, loop, cooldown, flip-flop,
-display. Each kind converted turned an entry in that list into an agreement.
+Both schedulers still exist, and that is still the correct state — but the roles have swapped.
+**Production runs on the engine**; `engine.rs` is now only the differential's other half.
+`workflows/differential.rs` runs the same graph through both and requires the same node sequence
+AND the same arms, over fourteen shapes with `KNOWN_DIFFERENCES` empty.
+
+Two of those shapes enter through a **sub-run** — one node, with a payload — which is how an
+`OnEvent` delivery and a `DelayTrigger` re-entry arrive, and which was outside the oracle
+entirely until the swap.
+
+Arms are compared because a scheduler can get the node order right and the routing wrong. Doing so
+found a live bug: `engine.rs` announces an arm in ONE place, the `run_node` path, so the arms
+fired by engine-driven nodes — `loop_body`, `completed`, a Cooldown's `exec_out` — reach nobody,
+and the edge out of a loop body never lights (#206, in the half its fix missed). `DRIVER_MISSES_STEP_ARMS`
+names those four shapes; the exception is one-directional, since the driver may report fewer arms
+than the engine but never a different one.
 
 Two fields joined `ToolContext` on the way, both for the reason `ui_tx` was already there —
 this product's world, supplied by whoever runs the graph, so no engine trait learns what an event
@@ -308,10 +320,22 @@ is here or what a graph is called:
   `EmitEvent` then SAYS the event was not fired rather than reporting a fire that reached nobody.
 - `graph_name: String` — what a person reads on a lock screen when a Device Gate asks them.
 
-**NOT swapped: the scheduler itself.** Replacing `run_dag_eventful` with `ggraph_core::run` is
-the last step and only became possible once the twelve kinds had real behaviours. The differential
-suite is the gate for it: extend the shape list first, then swap, then delete `engine.rs`'s
-inline blocks. Still local as well: `repo.rs` and the 12 engine-owned migrations.
+**The scheduler is swapped.** `app_core::workflows::run_graph` is the door — `sentinel-flow` asks
+for a graph to be run and gets back how many nodes ran, naming no scheduler and building no
+`Entry`. Two things had to move with it, and neither would have failed loudly:
+
+- **the deferral of pure sources** (#115, #205) became `workflows/observer.rs`. Holding back a
+  ping is a decision about REPORTING, not execution, so it belongs in an `Observer` that any
+  scheduler carries. The ping is released the instant a reader starts; the Console line waits for
+  the end of the run. Two moments, on purpose — collapsing them would reorder the log of every
+  graph that exists, which is worth doing as its own change;
+- **remembering what a run produced.** A `DelayTrigger`'s trailing edge fires from a timer with no
+  payload, so the only way it sees the arming run's `camera` is to reread that run's outputs. The
+  engine could restore but refused unless it was also writing checkpoints — the opposite of what
+  this product wants, which is to remember each node's last value forever and clear nothing.
+  `Entry::restore` asks directly now, and `remember()` writes what ran.
+
+Still local: `repo.rs` and the 12 engine-owned migrations.
 
 **The oracles are what made this a mechanical afternoon rather than a gamble.** `check:rust` runs
 `cargo test -p app-core --lib workflows` — before #204 it ran `cargo check --all-targets`, which
