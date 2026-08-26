@@ -34,28 +34,69 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Records the order nodes executed in, which is the only thing being compared.
 #[derive(Default)]
-struct Order(Mutex<Vec<u32>>);
+struct Order {
+    nodes: Mutex<Vec<u32>>,
+    arms: Mutex<Vec<(u32, String)>>,
+}
 
 impl Observer for Order {
     fn node_started(&self, node: u32) {
-        self.0.lock().unwrap().push(node);
+        self.nodes.lock().unwrap().push(node);
+    }
+    fn arm(&self, node: u32, port: &str) {
+        self.arms.lock().unwrap().push((node, port.to_string()));
     }
     fn ui(&self, _node: u32, _event: UiEvent) {}
 }
 
 /// This product's scheduler.
-fn order_here(g: &Graph, sys: &ToolContext) -> Result<Vec<u32>, String> {
-    let mut order = Vec::new();
-    let mut on_node = |id: u32| order.push(id);
-    let mut on_arm = |_: u32, _: &str| {};
+/// What a run looked like from outside: which nodes ran, and which arms control left by.
+///
+/// Both, because they answer different questions and a scheduler can get one right while getting
+/// the other wrong. The node order says what happened; the arms say how control got there, which
+/// is what an editor draws and what #206 was about.
+#[derive(Debug, PartialEq, Eq)]
+struct Trace {
+    nodes: Vec<u32>,
+    arms: Vec<(u32, String)>,
+}
+
+/// Where a run starts. `None` is the whole graph; `Some` is a sub-run entering at one node with a
+/// payload — how an `OnEvent` delivery and a `DelayTrigger` re-entry arrive.
+type EntryAt = Option<(u32, PortValues)>;
+
+fn order_here(g: &Graph, sys: &ToolContext, entry: EntryAt) -> Result<Trace, String> {
+    let mut nodes = Vec::new();
+    let mut arms = Vec::new();
+    let mut on_node = |id: u32| nodes.push(id);
+    let mut on_arm = |id: u32, port: &str| arms.push((id, port.to_string()));
     let mut on_log = |_: u32, _: &str, _: u128| {};
     let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_dag_eventful(g, sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)?;
-    Ok(order)
+    match entry {
+        Some((at, payload)) => super::engine::run_subpath_eventful(
+            g,
+            sys,
+            at,
+            payload,
+            &mut on_node,
+            &mut on_arm,
+            &mut on_log,
+            &mut emit,
+        )?,
+        None => super::engine::run_dag_eventful(
+            g,
+            sys,
+            &mut on_node,
+            &mut on_arm,
+            &mut on_log,
+            &mut emit,
+        )?,
+    };
+    Ok(Trace { nodes, arms })
 }
 
 /// The engine's scheduler, over the same graph and the same node implementations.
-fn order_engine(g: &Graph, sys: ToolContext) -> Result<Vec<u32>, String> {
+fn order_engine(g: &Graph, sys: ToolContext, entry: EntryAt) -> Result<Trace, String> {
     let rec = Arc::new(Order::default());
     // The deferral of pure sources is this product's, not the engine's — the engine reports every
     // node it runs and lets the host decide what that is worth. Wrapping the recorder here is what
@@ -73,16 +114,24 @@ fn order_engine(g: &Graph, sys: ToolContext) -> Result<Vec<u32>, String> {
             },
         )),
     );
+    let entry = match entry {
+        Some((at, payload)) => Entry {
+            at: vec![at],
+            payload: super::compat::to_engine_values(&payload),
+        },
+        None => Entry::default(),
+    };
     ggraph_core::run(
         g,
         super::registry::registry(),
         &host,
-        &Entry::default(),
+        &entry,
         &RunOptions::default(),
     )
     .map_err(|e| e.to_string())?;
-    let v = rec.0.lock().unwrap().clone();
-    Ok(v)
+    let nodes = rec.nodes.lock().unwrap().clone();
+    let arms = rec.arms.lock().unwrap().clone();
+    Ok(Trace { nodes, arms })
 }
 
 /// `Box<dyn Observer>` needs an owned value; the test needs to read the recording afterwards.
@@ -91,6 +140,9 @@ struct RecRef(Arc<Order>);
 impl Observer for RecRef {
     fn node_started(&self, node: u32) {
         self.0.node_started(node);
+    }
+    fn arm(&self, node: u32, port: &str) {
+        self.0.arm(node, port);
     }
     fn ui(&self, node: u32, event: UiEvent) {
         self.0.ui(node, event);
@@ -104,20 +156,79 @@ mod tests {
     use crate::workflows::golden::test_ctx;
     use serde_json::json;
 
+    /// Shapes where this product's driver reports FEWER arms than the engine, and the engine is the
+    /// one that is right.
+    ///
+    /// The driver announces an arm in exactly one place: the `run_node` path, which covers routers and
+    /// nodes firing their declared arms. Engine-driven nodes — ForEach, Cooldown, FlipFlop — mark their
+    /// arms live directly and tell nobody. So `loop_body`, `completed` and a Cooldown's `exec_out`
+    /// never reach the editor, and the edge out of a loop body does not light at all. That is #206
+    /// again, in the half of the graph the fix did not reach, and the swap closes it.
+    ///
+    /// The exception is one-directional on purpose: the driver may report fewer arms than the engine,
+    /// never a different one. An arm the driver invents is still a failure.
+    const DRIVER_MISSES_STEP_ARMS: &[(&str, &str)] = &[
+        (
+            "cooldown",
+            "the Cooldown's exec_out is fired by the step, which never calls on_arm",
+        ),
+        (
+            "loop",
+            "loop_body and completed are fired by the step, which never calls on_arm",
+        ),
+        ("nested", "same, on both levels"),
+        (
+            "flip flop",
+            "the arm it chooses is fired by the step, which never calls on_arm",
+        ),
+    ];
+
     /// Compare one shape, and report a difference the way a person needs to read it.
     fn agree(name: &str, g: &Graph) {
+        agree_from(name, g, None)
+    }
+
+    /// The same comparison, entering the graph the way a delivery does: at one node, with a
+    /// payload. This is how an `OnEvent` fires and how a `DelayTrigger` comes back, and until now
+    /// it was outside the oracle entirely — the swap would have been unverified for exactly the
+    /// paths that are hardest to reproduce in production.
+    fn agree_from(name: &str, g: &Graph, entry: EntryAt) {
         if let Some((_, why)) = KNOWN_DIFFERENCES.iter().find(|(n, _)| *n == name) {
             eprintln!("skipping {name}: {why}");
             return;
         }
-        let here = order_here(g, &test_ctx())
+        let here = order_here(g, &test_ctx(), entry.clone())
             .unwrap_or_else(|e| panic!("{name}: this product's scheduler failed: {e}"));
-        let engine = order_engine(g, test_ctx())
+        let engine = order_engine(g, test_ctx(), entry)
             .unwrap_or_else(|e| panic!("{name}: the engine's scheduler failed: {e}"));
+
+        // Which nodes ran, and in what order, must match everywhere. No exceptions, ever.
+        assert_eq!(
+            here.nodes, engine.nodes,
+            "{name}: the two schedulers ran different nodes, or ran them in a different \
+             order.\n  this product: {:?}\n  engine:       {:?}",
+            here.nodes, engine.nodes
+        );
+
+        // Arms are allowed one asymmetry, in one direction, on shapes named below.
+        if DRIVER_MISSES_STEP_ARMS.iter().any(|(n, _)| *n == name) {
+            for a in &here.arms {
+                assert!(
+                    engine.arms.contains(a),
+                    "{name}: this product reported an arm the engine did not — the exception is \
+                     for arms the DRIVER misses, not for arms it invents.\n  this product: \
+                     {:?}\n  engine:       {:?}",
+                    here.arms,
+                    engine.arms
+                );
+            }
+            return;
+        }
+
         assert_eq!(
             here, engine,
-            "{name}: the two schedulers ran different nodes, or ran them in a different order.\n  \
-             this product: {here:?}\n  engine:       {engine:?}\n\n\
+            "{name}: the two schedulers disagree about what ran, in what order, or along which \
+             arm.\n  this product: {here:?}\n  engine:       {engine:?}\n\n\
              Either the engine's scheduler is wrong, or this one does something nobody wrote \
              down. Both are worth knowing BEFORE the swap. If the difference is understood and \
              intended, add the shape to KNOWN_DIFFERENCES with the reason rather than deleting \
@@ -344,7 +455,9 @@ mod tests {
 
         // And say out loud what "agree" alone would not: that they agree on the RIGHT answer, not
         // merely on the same one.
-        let seen = order_engine(&gr, test_ctx()).expect("the engine runs it");
+        let seen = order_engine(&gr, test_ctx(), None)
+            .expect("the engine runs it")
+            .nodes;
         assert!(
             !seen.contains(&get_dead),
             "the source on the arm nobody took must not reach a person: {seen:?}"
@@ -353,5 +466,60 @@ mod tests {
             seen.contains(&get_live),
             "the source that was read must: {seen:?}"
         );
+    }
+
+    /// Entering halfway, the way a timer coming back does.
+    ///
+    /// A sub-run starts at one node and only what that node reaches may run. Everything upstream
+    /// stays where it was — which is the whole point, and also the shape where a scheduler that
+    /// treats "no incoming live arm" as "dead" wrongly kills the entry node itself.
+    #[test]
+    fn a_sub_run_starts_where_it_was_told_and_leaves_the_rest_alone() {
+        let mut x = g("sub-run");
+        let before = x.add(NodeKind::Print, 0, 0);
+        x.node_mut(before).unwrap().config =
+            json!({ "message": "before", "level": "info", "on_screen": false });
+        let at = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(at).unwrap().config =
+            json!({ "message": "at", "level": "info", "on_screen": false });
+        let after = x.add(NodeKind::Print, 400, 0);
+        x.node_mut(after).unwrap().config =
+            json!({ "message": "after", "level": "info", "on_screen": false });
+        x.wire(before, "exec_out", at, "exec_in").unwrap();
+        x.wire(at, "exec_out", after, "exec_in").unwrap();
+
+        agree_from("sub-run", &x, Some((at, PortValues::new())));
+
+        let seen = order_here(&x, &test_ctx(), Some((at, PortValues::new())))
+            .expect("it runs")
+            .nodes;
+        assert_eq!(
+            seen,
+            vec![at, after],
+            "a sub-run runs the node it entered at and what that reaches, and nothing before it"
+        );
+    }
+
+    /// An event delivery: entering at an `OnEvent` with a payload that becomes its outputs.
+    ///
+    /// The payload has to reach downstream nodes by port name, which means the entry node's
+    /// outputs are seeded from the delivery rather than produced by running it. Two schedulers
+    /// doing that differently is invisible until a graph reads a field and gets nothing.
+    #[test]
+    fn an_event_delivery_seeds_the_entry_node_and_flows_on() {
+        let mut x = g("delivery");
+        let on = x.add(NodeKind::OnEvent, 0, 0);
+        x.node_mut(on).unwrap().config = json!({ "event": "test_event" });
+        let out = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(out).unwrap().config =
+            json!({ "message": "got it", "level": "info", "on_screen": false });
+        x.wire(on, "exec_out", out, "exec_in").unwrap();
+
+        let mut payload = PortValues::new();
+        payload.insert(
+            "message".into(),
+            crate::workflows::PortValue::Text("hello".into()),
+        );
+        agree_from("delivery", &x, Some((on, payload)));
     }
 }

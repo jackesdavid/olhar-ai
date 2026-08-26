@@ -139,6 +139,14 @@ impl<O: Observer> Observer for DeferringObserver<O> {
         self.inner.node_finished(node, summary, elapsed_ms);
     }
 
+    fn arm(&self, node: u32, port: &str) {
+        // Pure sources have no exec arms, so there is nothing here to hold. It is forwarded all
+        // the same, and deliberately: a decorator that implements only the methods it cares about
+        // silently swallows every method added to the trait later, and the default no-op makes
+        // that look like the engine never reported it. This one cost an afternoon.
+        self.inner.arm(node, port);
+    }
+
     fn emitted(&self, event: &str, payload: &PortValues) {
         self.inner.emitted(event, payload);
     }
