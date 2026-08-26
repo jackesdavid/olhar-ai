@@ -769,17 +769,54 @@ O diferencial passou de 11 para 14 formas e ganhou duas dimensões:
 O `DeferringObserver` tem testes próprios, dirigidos à mão, sem scheduler nenhum — o contrato do
 #115/#205 deixou de estar amarrado a um driver que vai desaparecer.
 
-## Passo 3: por fazer, e de propósito
+## Passo 3: feito (2026-08-26)
 
-Apagar o `engine.rs` (2672 linhas) é o maior ganho de legibilidade que resta. **Fica para depois
-do teste em produção.** Enquanto os dois schedulers existem, o diferencial é a prova de que
-concordam e o driver é o caminho de volta; apagá-lo agora seria deitar fora a rede de segurança na
-véspera de precisar dela.
+O `engine.rs` e o `differential.rs` foram apagados — **3345 linhas fora, 156 dentro**. O que
+autorizou foi o teste ao vivo da janela: uma run manual armou (`armed for 10s → start`), o
+temporizador fechou 11 segundos depois (`window closed`), o ramo de stop disparou um `Notify`
+diferente, e o run reportou `ran 3 node(s)` com apenas 2 nós no log — o terceiro foi **restaurado**
+em vez de re-executado, que é exactamente para isso que a `Entry::restore` existe.
 
-Ordem quando a troca estiver confirmada ao vivo:
+### O que NÃO foi apagado, e porquê importa
 
-1. apagar `engine.rs` e o `differential.rs` (some com ele — sem dois schedulers não há o que
-   comparar);
-2. `repo.rs` (1610 linhas de SQL) + as 12 migrações da engine → um adaptador `ggraph-pg`;
-3. #207 — o Time Gate a não segurar uma thread; continua a precisar de uma decisão sua, porque
-   muda quando o `out` dispara e parte o histórico de runs.
+Os 28 testes que corriam contra o driver **nunca foram sobre ele**. São sobre o que um switch
+encaminha, o que um laço itera, que braço de um ramo fica morto. Foram para o `behaviour.rs` e
+repontados para `workflows::run` — agora exercitam o scheduler que corre em produção, o que vale
+mais do que valiam antes.
+
+Repontá-los descobriu **três diferenças** que o diferencial nunca cobriu, porque ele só entrava
+nos grafos pela porta da frente:
+
+1. **Um laço sem entrada não corre nada.** Num `A → B → A` puro todos os nós têm exec de entrada,
+   portanto não há por onde começar. O driver contava indegree sobre arestas não-de-retorno,
+   escolhia o `A` arbitrariamente e estourava o orçamento. Não correr é a resposta melhor —
+   escolher `A` e não `B` era moeda ao ar — mas é uma resposta diferente.
+2. **Uma aresta de retorno sozinha não repete.** A engine repete só quando um nó **pede**
+   re-entrada; o `ForEach` sabe pedir, um nó comum não. Os 31 grafos de produção foram
+   verificados: nenhum desenha laço assim.
+3. **Um ouvinte inerte fica registado.** A `OnEvent` numa run normal é visitada, não produz nada e
+   não dispara braço — mas aparece no mapa de outputs com valor vazio, e o resumo conta esse mapa.
+   Soma um ao `ran N node(s)`.
+
+Três peças saíram do ficheiro em vez de morrerem com ele, porque nunca foram código de scheduler:
+o portão de concorrência (`gate.rs`), o portão de eventos (`on_event_node`, agora ao lado do nó de
+que trata) e a leitura de listas de texto.
+
+A fachada passou a devolver os outputs em vez de uma contagem. Deitar fora o que um run produziu
+não tinha razão de ser.
+
+## O que resta, e não é do #204
+
+1. **`ggraph-pg`.** O `repo.rs` são **1610 linhas** de SQL — o maior ficheiro do módulo agora — mais
+   as oito migrações que são da engine e não do Sentinel (`workflows`, `workflow_engine_state`,
+   `workflow_node_state`, `workflow_runs`, `workflow_run_logs` e as suas alterações). Enquanto isto
+   não sair, **o Redoma partilha o motor mas escreve a persistência de raiz**: sem fila, sem
+   histórico de runs, sem estado por nó. É o item que decide se a extracção valeu para dois
+   produtos e não só para um. Vale fazer com o Redoma a pedir, não antes — o SQL tem formato do
+   Sentinel e as migrações vivem numa sequência numerada única que não se parte sem renumerar.
+2. **#207 — o Time Gate a segurar uma thread.** Continua a precisar de decisão, não de código:
+   muda quando o `out` dispara e parte o histórico de runs em dois.
+3. **Pontas do licenciamento** (AGPL-3.0-only desde a v0.17.0): um CLA antes do primeiro PR
+   externo — depois dele é tarde; uma excepção de ligação, se a AGPL se revelar demasiado para
+   quem só quer ligar a biblioteca; um guarda no CI para consumo por tag, que o crates.io
+   resolveria sozinho.

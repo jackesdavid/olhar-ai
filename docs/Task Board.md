@@ -196,26 +196,6 @@ kanban-plugin: board
 
 ## Generation
 
-- [ ] #204 ggraph — extrair a engine de grafos para repo próprio
-	  - Plan: [[ggraph-engine-extraction]]
-	  - Engine compartilhada com o Redoma (projeto novo). Repo: github.com/jackesdavid/graph-engine
-	  - Fase 0 (o oráculo) FEITA: `check:rust` agora RODA os 118 testes da engine, que antes eram
-	    só compilados; mais o snapshot do catálogo e os grafos-ouro. Sem isso o refactor não
-	    tinha rede nenhuma.
-	  - Fase 1 FEITA: o core roda grafos. 21 nós (um por arquivo), 117 testes, os dois guardas
-	    de agnosticismo no CI. Inclui o checkpoint durável, que era o maior risco da fase.
-	  - Achado que muda o plano: exec-stream e exec-durable NÃO são dois crates — é um
-	    scheduler e um enum de política. Ver a nota.
-	  - Fase 2 FEITA e VERIFICADA em produção: portas tipadas, Edge, regra de compatibilidade e
-	    os 91 kinds num registry da engine. O catálogo passou a responder certo para os seis nós
-	    de config — era um bug antigo: o endpoint lia a tabela estática e o scheduler a dinâmica.
-	  - CORRIGIDO no plano: `Graph<SentinelMeta>` NÃO é uma fatia separada. `Graph<M>` contém
-	    `GraphNode`, que contém `NodeId` — então adotá-lo arrasta a conversão NodeKind→NodeId
-	    inteira (os 828 braços). Tentado e revertido; a nota tem os números e a técnica.
-	  - PRÓXIMO: NodeKind→NodeId + Graph/GraphNode numa fatia só, família por família, com a
-	    camada de compatibilidade (`PartialEq<NodeKind> for NodeId`, `From`, `AsKind`) que
-	    absorveu 16 sítios sem tocar em nenhum. Depois a troca do scheduler.
-
 - [ ] #190 Push delivery is never verified — we read the ticket, never the receipt
 	  - Plan: [[push-receipts-not-just-tickets]]
 	  - Phase 1 BUILT: receipts read on a delayed work_jobs job; only DeviceNotRegistered
@@ -270,6 +250,27 @@ kanban-plugin: board
 
 
 ## Done
+
+- [x] #204 ggraph — a engine de grafos extraída para repo próprio
+	  - Plan: [[ggraph-engine-extraction]] · Repo: github.com/jackesdavid/graph-engine
+	  - FEITO e VERIFICADO em produção (2026-08-26). Todo run — manual, cron, entrega de evento,
+	    re-entrada de temporizador — passa por `ggraph_core::run`. O scheduler deste produto foi
+	    APAGADO: 3345 linhas fora, 156 dentro.
+	  - Provado ao vivo antes de apagar: uma janela de DelayTrigger armou por run manual, fechou
+	    por temporizador 11s depois, o ramo de stop disparou, e o run diz "ran 3 node(s)" com 2
+	    nós no log — o terceiro foi RESTAURADO, não re-executado.
+	  - SETE regressões silenciosas encontradas e corrigidas antes do merge, todas da mesma
+	    família (duas implementações de uma regra, uma no driver e outra no caminho novo): o
+	    envelope dos valores, a coluna das variáveis, a chave de instância, o timeout por nó,
+	    `run_orphans`, o `summary` do adaptador, e três passos sem linha de log. Nenhuma dava erro.
+	  - A defesa que ficou: os 28 testes do driver não morreram — foram repontados para a fachada
+	    (`behaviour.rs`) e agora exercitam o scheduler que corre de verdade. Isso descobriu mais
+	    três diferenças, todas escritas como teste.
+	  - Licença: AGPL-3.0-only a partir da v0.17.0 (v0.1.0–v0.15.0 ficam MIT/Apache, v0.16.0 MPL —
+	    apertar licença só vale para a frente).
+	  - FORA deste cartão, e é o que resta da ideia de partilhar com o Redoma: `ggraph-pg` —
+	    `repo.rs` (1610 linhas de SQL) + as oito migrações que são da engine. Sem isso o Redoma
+	    partilha o motor mas escreve a persistência de raiz.
 
 - [x] #154 Security hardening PRs 1–5 — prod verification complete
 	  - Plan: [[security-hardening-remainder]]
