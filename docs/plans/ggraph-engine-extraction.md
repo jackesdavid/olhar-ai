@@ -677,3 +677,47 @@ precisa do próprio card.
 Converter um kind e deixar o scheduler daqui usando o bloco inline **é o estado correto** durante
 a migração: os dois caminhos existem, e o diferencial prova que concordam. A troca em si é o
 último passo, quando os doze estiverem convertidos e a lista de formas cobrir o que importa.
+
+
+---
+
+# A troca em si: o que ela realmente exige (2026-08-25)
+
+Os doze kinds viraram comportamentos e o diferencial concorda em **onze formas** — cadeia, ramo,
+fan-in, ramo morto profundo, switch, literais de config, laço, laço aninhado, cooldown,
+flip-flop, display. Zero exceções carregadas.
+
+Isso torna a troca possível. Mas montar as formas revelou que ela **não é trocar a chamada**.
+
+## O que o driver do bishop faz e o da engine não
+
+Quinze sítios em `engine.rs` implementam o **adiamento de reporte** (#115, #205): uma fonte pura
+ativa a cada época, inclusive em braços que ninguém tomou, então o ping dela fica retido até um
+nó que **a lê** rodar. A engine não tem nada disso — o `exec.rs` dela chama
+`node_started`/`node_finished` direto.
+
+**Trocar o scheduler sem mover isso regride o #205 e o #206**, que você acabou de verificar em
+produção.
+
+## Onde isso deve morar, e por que é melhor lá
+
+Num `Observer`, não no scheduler. Adiar um ping é decisão de **reporte**, não de execução — e o
+`SentinelHost` já recebe o observer como `Box<dyn Observer>`, então cabe sem mudar a engine.
+
+O observer precisa de conhecimento do grafo que hoje o driver tem de graça: quais nós são fontes
+puras, e quem lê cada uma. Construído por run a partir do grafo, isso é um mapa
+`nó → leitores`, e o adiamento vira: segura o ping de uma fonte pura, solta quando um leitor
+dela começa.
+
+Melhor que hoje por um motivo concreto: o scheduler deixa de saber que existe um kind chamado
+`GetVariable`.
+
+## Ordem sugerida
+
+1. `DeferringObserver` no `workflows/`, construído do grafo, com os testes do #115/#205 apontados
+   para ele em vez de para o driver.
+2. Trocar `run_dag_eventful` por `ggraph_core::run` no `sentinel-flow`.
+3. Apagar os blocos inline e os quinze sítios de adiamento do `engine.rs`.
+
+O diferencial é o portão dos três passos, e some no terceiro — quando só existe um scheduler, não
+há o que comparar.

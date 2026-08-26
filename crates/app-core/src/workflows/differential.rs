@@ -116,6 +116,94 @@ mod tests {
         g
     }
 
+    /// Two branches converging on one node. The shape that broke the edge highlight (#206), and
+    /// the one where a scheduler that counts activations rather than arms goes wrong.
+    #[test]
+    fn fan_in_runs_the_target_once_per_live_arm() {
+        let mut x = g("fan in");
+        let gate = x.add(NodeKind::If, 0, 0);
+        x.node_mut(gate).unwrap().config = json!({ "condition": true });
+        let target = x.add(NodeKind::Print, 300, 0);
+        x.node_mut(target).unwrap().config =
+            json!({ "message": "reached", "level": "info", "on_screen": false });
+        x.wire(gate, "true", target, "exec_in").unwrap();
+        x.wire(gate, "false", target, "exec_in").unwrap();
+        agree("fan in", &x);
+    }
+
+    /// A switch picks one arm by matching text, and the arms are named by configuration rather
+    /// than by a static table — so this also checks both schedulers resolve the same arm SET.
+    #[test]
+    fn a_switch_takes_the_arm_its_value_names() {
+        let mut x = g("switch");
+        let src = x.add(NodeKind::Format, 0, 0);
+        x.node_mut(src).unwrap().config = json!({ "template": "beta" });
+        let sw = x.add(NodeKind::StringSwitch, 200, 0);
+        x.node_mut(sw).unwrap().config = json!({ "arms": ["alpha", "beta"] });
+        let hit = x.add(NodeKind::Print, 400, -60);
+        x.node_mut(hit).unwrap().config =
+            json!({ "message": "beta", "level": "info", "on_screen": false });
+        let miss = x.add(NodeKind::Print, 400, 60);
+        x.node_mut(miss).unwrap().config =
+            json!({ "message": "default", "level": "info", "on_screen": false });
+        x.wire(src, "text", sw, "value").unwrap();
+        x.wire(sw, "beta", hit, "exec_in").unwrap();
+        x.wire(sw, "default", miss, "exec_in").unwrap();
+        agree("switch", &x);
+    }
+
+    /// Deadness has to PROPAGATE: everything under an untaken arm stays unrun, not just the
+    /// first node. A scheduler that only checks the immediate parent gets this wrong two nodes
+    /// down, which is exactly where nobody looks.
+    #[test]
+    fn a_dead_arm_stays_dead_all_the_way_down() {
+        let mut x = g("deep dead");
+        let gate = x.add(NodeKind::If, 0, 0);
+        x.node_mut(gate).unwrap().config = json!({ "condition": false });
+        let first = x.add(NodeKind::Print, 200, 0);
+        x.node_mut(first).unwrap().config =
+            json!({ "message": "one", "level": "info", "on_screen": false });
+        let second = x.add(NodeKind::Print, 400, 0);
+        x.node_mut(second).unwrap().config =
+            json!({ "message": "two", "level": "info", "on_screen": false });
+        x.wire(gate, "true", first, "exec_in").unwrap();
+        x.wire(first, "exec_out", second, "exec_in").unwrap();
+        agree("deep dead", &x);
+    }
+
+    /// A node whose inputs come only from the inspector, with nothing wired. The common case in
+    /// a real graph, and the one the engine could not do at all until `Host::literals` existed.
+    #[test]
+    fn a_node_fed_only_by_configuration_runs() {
+        let mut x = g("literals");
+        let cmp = x.add(NodeKind::NumGt, 0, 0);
+        x.node_mut(cmp).unwrap().config = json!({ "a": "5", "b": "3" });
+        let br = x.add(NodeKind::If, 200, 0);
+        let taken = x.add(NodeKind::Print, 400, 0);
+        x.node_mut(taken).unwrap().config =
+            json!({ "message": "greater", "level": "info", "on_screen": false });
+        x.wire(cmp, "result", br, "condition").unwrap();
+        x.wire(br, "true", taken, "exec_in").unwrap();
+        agree("literals", &x);
+    }
+
+    /// A loop whose body is itself a loop. The index lives per node, so an inner loop finishing
+    /// must not look finished when the outer one comes round again.
+    #[test]
+    fn a_loop_inside_a_loop_starts_over_each_outer_pass() {
+        let mut x = g("nested");
+        let outer = x.add(NodeKind::ForEach, 0, 0);
+        x.node_mut(outer).unwrap().config = json!({ "items": "a,b" });
+        let inner = x.add(NodeKind::ForEach, 200, 0);
+        x.node_mut(inner).unwrap().config = json!({ "items": "x,y" });
+        let body = x.add(NodeKind::Print, 400, 0);
+        x.node_mut(body).unwrap().config =
+            json!({ "message": "cell", "level": "info", "on_screen": false });
+        x.wire(outer, "loop_body", inner, "exec_in").unwrap();
+        x.wire(inner, "loop_body", body, "exec_in").unwrap();
+        agree("nested", &x);
+    }
+
     #[test]
     fn a_straight_chain() {
         let mut x = g("chain");
