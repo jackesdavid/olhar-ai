@@ -18,6 +18,7 @@ pub mod node;
 pub mod observer;
 pub mod registry;
 pub mod repo;
+pub mod run;
 pub mod schedule;
 pub mod steps;
 pub mod values;
@@ -34,4 +35,7 @@ pub use engine::{
 };
 pub use host::{SentinelHost, SentinelMeta};
 pub use node::{literal_for, run_node, PortValue, PortValues};
+// The facade's promise: a caller reports what a run did without naming the engine that ran it.
+pub use ggraph_core::host::{Observer, UiEvent};
 pub use repo::{EventCategory, RunLogLine, RunRecord, TenantEvent};
+pub use run::{run as run_graph, Start};

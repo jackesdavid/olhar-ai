@@ -117,6 +117,9 @@ fn order_engine(g: &Graph, sys: ToolContext, entry: EntryAt) -> Result<Trace, St
     let entry = match entry {
         Some((at, payload)) => Entry {
             at: vec![at],
+            // The same rule the facade applies, restated here so the comparison runs the graph the
+            // way production does rather than the way the harness finds convenient.
+            restore: payload.contains_key(super::domain::WINDOW_STOP_MARKER),
             payload: super::compat::to_engine_values(&payload),
         },
         None => Entry::default(),

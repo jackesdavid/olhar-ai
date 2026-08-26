@@ -176,6 +176,17 @@ pub struct UiObserver {
     tx: std::sync::mpsc::Sender<ToolUiEvent>,
 }
 
+impl UiObserver {
+    /// Build one over a run's UI channel.
+    ///
+    /// Public because a product that replaces the whole observer still owes the editor its live
+    /// view: it wraps one of these rather than restating the mapping from a node's output to what
+    /// a person sees, which is the sort of duplicate that drifts quietly.
+    pub fn new(tx: std::sync::mpsc::Sender<ToolUiEvent>) -> Self {
+        UiObserver { tx }
+    }
+}
+
 impl Observer for UiObserver {
     fn ui(&self, _node: u32, event: UiEvent) {
         let _ = match event {
