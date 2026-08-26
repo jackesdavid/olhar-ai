@@ -2,8 +2,7 @@
 //! resolving the RTSP stream URI, and fetch a JPEG snapshot. Copied verbatim
 //! from the ratatui `src/onvif/client.rs`.
 use std::io::Read;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rand::RngCore;
