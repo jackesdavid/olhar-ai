@@ -37,6 +37,7 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 struct Order {
     nodes: Mutex<Vec<u32>>,
     arms: Mutex<Vec<(u32, String)>>,
+    lines: Mutex<Vec<(u32, String)>>,
 }
 
 impl Observer for Order {
@@ -45,6 +46,9 @@ impl Observer for Order {
     }
     fn arm(&self, node: u32, port: &str) {
         self.arms.lock().unwrap().push((node, port.to_string()));
+    }
+    fn node_finished(&self, node: u32, summary: &str, _ms: u128) {
+        self.lines.lock().unwrap().push((node, summary.to_string()));
     }
     fn ui(&self, _node: u32, _event: UiEvent) {}
 }
@@ -59,6 +63,9 @@ impl Observer for Order {
 struct Trace {
     nodes: Vec<u32>,
     arms: Vec<(u32, String)>,
+    /// The lines a person reads in the Console. The third thing a scheduler can get wrong on its
+    /// own — it can run the right nodes, along the right arms, and describe them differently.
+    lines: Vec<(u32, String)>,
 }
 
 /// Where a run starts. `None` is the whole graph; `Some` is a sub-run entering at one node with a
@@ -68,9 +75,10 @@ type EntryAt = Option<(u32, PortValues)>;
 fn order_here(g: &Graph, sys: &ToolContext, entry: EntryAt) -> Result<Trace, String> {
     let mut nodes = Vec::new();
     let mut arms = Vec::new();
+    let mut lines = Vec::new();
     let mut on_node = |id: u32| nodes.push(id);
     let mut on_arm = |id: u32, port: &str| arms.push((id, port.to_string()));
-    let mut on_log = |_: u32, _: &str, _: u128| {};
+    let mut on_log = |id: u32, msg: &str, _: u128| lines.push((id, msg.to_string()));
     let mut emit = |_: &str, _: &PortValues| {};
     match entry {
         Some((at, payload)) => super::engine::run_subpath_eventful(
@@ -92,7 +100,7 @@ fn order_here(g: &Graph, sys: &ToolContext, entry: EntryAt) -> Result<Trace, Str
             &mut emit,
         )?,
     };
-    Ok(Trace { nodes, arms })
+    Ok(Trace { nodes, arms, lines })
 }
 
 /// The engine's scheduler, over the same graph and the same node implementations.
@@ -143,7 +151,8 @@ fn order_engine(g: &Graph, sys: ToolContext, entry: EntryAt) -> Result<Trace, St
     .map_err(|e| e.to_string())?;
     let nodes = rec.nodes.lock().unwrap().clone();
     let arms = rec.arms.lock().unwrap().clone();
-    Ok(Trace { nodes, arms })
+    let lines = rec.lines.lock().unwrap().clone();
+    Ok(Trace { nodes, arms, lines })
 }
 
 /// `Box<dyn Observer>` needs an owned value; the test needs to read the recording afterwards.
@@ -155,6 +164,9 @@ impl Observer for RecRef {
     }
     fn arm(&self, node: u32, port: &str) {
         self.0.arm(node, port);
+    }
+    fn node_finished(&self, node: u32, summary: &str, ms: u128) {
+        self.0.node_finished(node, summary, ms);
     }
     fn ui(&self, node: u32, event: UiEvent) {
         self.0.ui(node, event);
@@ -251,6 +263,9 @@ mod tests {
     fn g(name: &str) -> Graph {
         let mut g = Graph::new(name);
         g.meta.enabled = true;
+        // Debug on, or the driver emits no log lines and the comparison of what a person reads
+        // silently compares nothing against nothing.
+        g.meta.debug = true;
         g
     }
 

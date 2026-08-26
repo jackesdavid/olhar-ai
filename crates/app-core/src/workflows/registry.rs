@@ -70,6 +70,23 @@ impl NodeRun<SentinelHost> for Legacy {
             node::run_node(self.0, cx.config, &inputs, cx.host.tools()).map_err(NodeError::new)?;
         Ok(super::compat::to_engine_values(&out))
     }
+
+    /// The line a person reads in the Console.
+    ///
+    /// Without this the engine's default reports the raw outputs, which is a reasonable thing for
+    /// an engine to say and useless next to what each kind knows to say about itself: which two
+    /// numbers were compared and which way it went, which camera a frame came from, how many rows
+    /// a query matched. `debug_summary` has one arm per kind for exactly that, and leaving it
+    /// unwired would have quietly emptied the Console of everything worth reading while still
+    /// printing a line for every node.
+    fn summary(&self, cx: &NodeCx<'_, SentinelHost>, out: &PortValues) -> String {
+        node::debug_summary(
+            self.0,
+            cx.config,
+            &super::compat::from_engine_values(cx.inputs),
+            &super::compat::from_engine_values(out),
+        )
+    }
 }
 
 fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
