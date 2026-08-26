@@ -589,4 +589,26 @@ mod tests {
         );
         agree("leftover, asked for", &x);
     }
+
+    /// Firing a cross-graph event.
+    ///
+    /// The path changed underneath this one: the old scheduler called a closure handed in beside
+    /// the graph, the node now asks the run's context for its event bus. A run with no bus SAYS the
+    /// event was not fired rather than reporting a fire that reached nobody — and the two schedulers
+    /// have to agree about which of those happened.
+    #[test]
+    fn firing_an_event_behaves_the_same_either_way() {
+        let mut x = g("emit");
+        let fire = x.add(NodeKind::EmitEvent, 0, 0);
+        x.node_mut(fire).unwrap().config["event"] = json!("something_happened");
+
+        let here = order_here(&x, &test_ctx(), None);
+        let engine = order_engine(&x, test_ctx(), None);
+
+        assert_eq!(
+            here.is_ok(),
+            engine.is_ok(),
+            "one of them fired an event the other refused to.\n  this product: {here:?}\n               engine:       {engine:?}"
+        );
+    }
 }
