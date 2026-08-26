@@ -4,6 +4,52 @@ Rolling session memory (newest first). Maintained via the `/handoff` skill. Each
 changed, branch/commits, state, what's pending, blockers. Deep per-area detail lives in
 `docs/ref/*.md`.
 
+## 2026-08-26 — #204 fechado: um scheduler, e o driver apagado
+
+- **Branch:** `chore/204-delete-the-old-scheduler` → !147. Antes: !145 (a troca) e !146 (AGPL).
+- **Engine:** `v0.17.0`, AGPL-3.0-only, presa por tag.
+
+### Done
+
+**O scheduler deste produto foi APAGADO** — 3345 linhas fora, 156 dentro. O que autorizou foi o
+teste ao vivo da janela, verificado nos dados e não na impressão: uma run manual armou
+(`armed for 10s → start`), o temporizador fechou 11 segundos depois (`window closed`), o ramo de
+stop disparou um `Notify` diferente, e o run reportou `ran 3 node(s)` com 2 nós no log — o terceiro
+foi **restaurado**, não re-executado.
+
+**Os 28 testes do driver não morreram.** Nunca foram sobre ele: são sobre o que um switch
+encaminha, o que um laço itera, que braço fica morto. Foram para `behaviour.rs` e repontados para
+`workflows::run`. Isso descobriu três diferenças que o diferencial nunca cobriu, todas agora
+fixadas como teste — um laço sem entrada não corre nada, uma aresta de retorno sozinha não repete
+(31 grafos de produção verificados: nenhum depende disso), e um ouvinte inerte fica registado no
+mapa de outputs, somando um ao `ran N node(s)`.
+
+**Licença: AGPL-3.0-only** desde a `v0.17.0`. Escolhida depois de descartar MPL — a MPL dispara na
+distribuição, portanto quem alterasse e só corresse como serviço nunca devolvia nada. O custo foi
+dito e aceite: a AGPL não distingue alterar de ligar. `v0.1.0`–`v0.15.0` ficam MIT/Apache e a
+`v0.16.0` fica MPL — apertar licença só vale para a frente. O README declara a reserva do titular
+do copyright, que vale **enquanto for autor único**.
+
+### Pending
+
+- **`ggraph-pg`** — `repo.rs` (1610 linhas, o maior ficheiro do módulo) + oito migrações que são da
+  engine. Sem isso o Redoma partilha o motor e escreve a persistência de raiz. É o que decide se a
+  extracção valeu para dois produtos.
+- **#207** — o Time Gate a segurar uma thread. Precisa de decisão, não de código.
+- **CLA antes do primeiro PR externo.** Depois dele, relicenciar precisa do consentimento de quem
+  contribuiu.
+- **Dívida pré-existente, não do #204:** o edge distribui 496 dependências MIT/Apache sem ficheiro
+  de avisos. Era devido antes disto tudo.
+
+### Armadilha registada
+
+Um nó que estoura o timeout é abandonado e a sua thread segura um clone do contexto, logo o canal
+de UI não fecha e `drain.join()` bloqueia. O driver antigo fazia o mesmo — não é regressão, mas é
+real.
+
+---
+
+
 ---
 
 ## 2026-08-25 (later) — production runs on the engine's scheduler, and the files got readable

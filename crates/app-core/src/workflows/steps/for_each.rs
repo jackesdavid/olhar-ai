@@ -23,9 +23,9 @@ impl NodeStep<SentinelHost> for ForEach {
         // move, and a move that quietly altered what counts as a list would be a bad one.
         let items: Vec<PortValue> = match inputs.get("items") {
             Some(PortValue::List(v)) => v.clone(),
-            Some(PortValue::Text(t)) => crate::workflows::engine::parse_text_items(t),
+            Some(PortValue::Text(t)) => crate::workflows::node::parse_text_items(t),
             Some(other) => vec![other.clone()],
-            None => crate::workflows::engine::parse_text_items(
+            None => crate::workflows::node::parse_text_items(
                 cx.config
                     .get("items")
                     .and_then(|v| v.as_str())

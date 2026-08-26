@@ -11,10 +11,9 @@ with a second product. Card **#204**, plan note
 [ggraph-engine-extraction](../plans/ggraph-engine-extraction.md). What already comes from there:
 typed ports (`PortType`, `Port`, `PortName`), `Edge`, the wire-compatibility rule, and the **node
 registry** that the catalog and wire validation read — **and the scheduler**: every production run
-goes through `ggraph_core::run`. What is still local:
-`crates/app-core/src/workflows/{node/, repo.rs}` — the per-kind implementations and the Postgres
-persistence. `engine.rs` is this product's old scheduler, kept as the differential's other half
-until the swap is confirmed live.
+goes through `ggraph_core::run`. This product's own scheduler is GONE (3345 lines, deleted once the
+swap was proven live). What is still local: `crates/app-core/src/workflows/{node/, repo.rs}` — the
+per-kind implementations and the Postgres persistence.
 
 Three things not to rediscover:
 
@@ -92,7 +91,7 @@ is how a graph comes to treat "nobody answered" as "go ahead".
 | `device_gate_requests` table | migration `0094` |
 | Request lifecycle (mint / settle / claim / pending) | `crates/app-core/src/workflows/device_gate.rs` |
 | Node kind + 3 exec arms | `workflows/domain.rs` (`NodeKind::DeviceGate`) |
-| Ask + resume | `workflows/engine.rs` (engine-driven, like `DelayTrigger`) |
+| Ask + resume | `workflows/steps/device_gate.rs` (a `NodeStep`, like `DelayTrigger`) |
 | Push with a machine-readable payload | `notification/push.rs` (`send_data`) |
 | Resume sweep | `sentinel-flow/src/gate_consumer.rs` |
 
@@ -211,7 +210,7 @@ its dynamic *output* ports). Today: `camera` (`PortType::Camera`) and `region`
   points mean a line or a zone is decided by the *reading* node, purely by count (2 = line,
   `line_crossed`; 3+ = zone, `object_entered`/`object_exited`) — `Region` itself doesn't know or
   care which.
-- `on_event_node(graph, event, event_camera, devices)` (`engine.rs`) is the actual gate: no
+- `on_event_node(graph, event, event_camera, devices)` (`steps/on_event.rs`) is the actual gate: no
   camera on the event (e.g. `telegram_message`) → no filtering. Node unscoped (no camera
   resolved) → matches any camera (today's behavior, unchanged). Node scoped → the event's own
   camera (`payload["camera"]`) must resolve to the SAME device. `sentinel-flow::fire_event` is
@@ -296,21 +295,25 @@ sent for `tuya_control`; it replaces instead, or the fix would have drawn two.
 ForEach, Cooldown, FlipFlop, Comment, Text/Gauge, ShowImage, EmitEvent, OnEvent, DelayTrigger,
 DeviceGate. Only `TimeGate` is outside, deliberately — see #207, it changes when `out` fires.
 
-Both schedulers still exist, and that is still the correct state — but the roles have swapped.
-**Production runs on the engine**; `engine.rs` is now only the differential's other half.
-`workflows/differential.rs` runs the same graph through both and requires the same node sequence
-AND the same arms, over fourteen shapes with `KNOWN_DIFFERENCES` empty.
+There is one scheduler now. `workflows/behaviour.rs` holds the tests that used to drive the old
+one — they were never about it, so they were repointed at `workflows::run` and now exercise what
+production runs. Three differences surfaced when they were, and all three are pinned as tests:
 
-Two of those shapes enter through a **sub-run** — one node, with a payload — which is how an
-`OnEvent` delivery and a `DelayTrigger` re-entry arrive, and which was outside the oracle
-entirely until the swap.
+- **a loop with no way in runs nothing.** Every node in a bare `A → B → A` has an incoming exec
+  edge, so there is nowhere for control to start. The old scheduler counted indegree over non-back
+  edges, picked one arbitrarily and spun to the budget;
+- **a back-edge on its own does not repeat.** The engine repeats only when a node ASKS to be
+  re-entered — `ForEach` can say that, an ordinary node cannot. All 31 production graphs were
+  checked; none draws a loop this way;
+- **an inert listener is recorded.** `OnEvent` on a normal run is visited, produces nothing and
+  fires no arm, so everything below stays dead — but it lands in the outputs map with an empty
+  value, and the run summary counts that map.
 
-Arms are compared because a scheduler can get the node order right and the routing wrong. Doing so
-found a live bug: `engine.rs` announces an arm in ONE place, the `run_node` path, so the arms
-fired by engine-driven nodes — `loop_body`, `completed`, a Cooldown's `exec_out` — reach nobody,
-and the edge out of a loop body never lights (#206, in the half its fix missed). `DRIVER_MISSES_STEP_ARMS`
-names those four shapes; the exception is one-directional, since the driver may report fewer arms
-than the engine but never a different one.
+Seven silent regressions were found and fixed BEFORE the swap merged, all one family: two
+implementations of a single rule, one in the driver and one on the new path. The value envelope,
+the variables column, the instance key, the per-node timeout, `run_orphans`, the adapter's missing
+`summary`, and three steps with no log line. None of them errored; every one would have surfaced
+hours later as wrong behaviour. The lasting defence is the golden suite plus `behaviour.rs`.
 
 Two fields joined `ToolContext` on the way, both for the reason `ui_tx` was already there —
 this product's world, supplied by whoever runs the graph, so no engine trait learns what an event

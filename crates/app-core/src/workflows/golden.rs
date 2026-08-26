@@ -170,17 +170,85 @@ pub(super) fn test_ctx() -> ToolContext {
     )
 }
 
+/// Run a graph the way production does, recording which nodes lit.
+///
+/// Through `workflows::run` — the engine's scheduler, this product's registry, the deferring
+/// observer — because a golden file that passed against a path nobody runs would be a golden file
+/// nobody should trust.
+fn order_through(
+    g: &Graph,
+    ctx: &ToolContext,
+    entry: Option<(u32, PortValues)>,
+) -> Result<Vec<u32>, String> {
+    use ggraph_core::host::{Observer, UiEvent};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Order(Mutex<Vec<u32>>);
+    impl Observer for Order {
+        fn node_started(&self, node: u32) {
+            self.0.lock().unwrap().push(node);
+        }
+        fn ui(&self, _: u32, _: UiEvent) {}
+    }
+    struct Ref(Arc<Order>);
+    impl Observer for Ref {
+        fn node_started(&self, node: u32) {
+            self.0.node_started(node);
+        }
+        fn ui(&self, node: u32, event: UiEvent) {
+            self.0.ui(node, event);
+        }
+    }
+
+    let rec = Arc::new(Order::default());
+    let watcher = super::observer::DeferringObserver::new(g, Ref(rec.clone()), |n| {
+        crate::workflows::domain::AsKind::as_kind(&n.kind).is_some_and(|k| k.is_pure_source())
+    });
+    let host = super::host::SentinelHost::watching(ctx.clone(), Box::new(watcher));
+    let start = match entry {
+        Some((at, payload)) => super::Start::At(at, payload),
+        None => super::Start::Whole,
+    };
+    super::run_graph(g, &host, start)?;
+    let v = rec.0.lock().unwrap().clone();
+    Ok(v)
+}
+
+/// Which arms fired, in order, as `(node, port)`. What an editor draws a live edge from.
+fn arms_fired(g: &Graph) -> Vec<(u32, String)> {
+    use ggraph_core::host::{Observer, UiEvent};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Arms(Mutex<Vec<(u32, String)>>);
+    impl Observer for Arms {
+        fn arm(&self, node: u32, port: &str) {
+            self.0.lock().unwrap().push((node, port.to_string()));
+        }
+        fn ui(&self, _: u32, _: UiEvent) {}
+    }
+    struct Ref(Arc<Arms>);
+    impl Observer for Ref {
+        fn arm(&self, node: u32, port: &str) {
+            self.0.arm(node, port);
+        }
+        fn ui(&self, node: u32, event: UiEvent) {
+            self.0.ui(node, event);
+        }
+    }
+
+    let rec = Arc::new(Arms::default());
+    let host = super::host::SentinelHost::watching(test_ctx(), Box::new(Ref(rec.clone())));
+    super::run_graph(g, &host, super::Start::Whole).expect("runs");
+    let v = rec.0.lock().unwrap().clone();
+    v
+}
+
 /// The ids of the nodes that executed, in order. This is the whole behavioural contract.
 fn run_order(g: &Graph) -> Vec<u32> {
-    let sys = test_ctx();
-    let mut order = Vec::new();
-    let mut on_node = |id: u32| order.push(id);
-    let mut on_arm = |_: u32, _: &str| {};
-    let mut on_log = |_: u32, _: &str, _: u128| {};
-    let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_dag_eventful(g, &sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)
-        .unwrap_or_else(|e| panic!("graph {:?} failed to run: {e}", g.name));
-    order
+    order_through(g, &test_ctx(), None)
+        .unwrap_or_else(|e| panic!("graph {:?} failed to run: {e}", g.name))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -358,21 +426,8 @@ fn an_orphan_pure_source_feeds_a_required_input_on_a_sub_run() {
     // A sub-run: entered at the switch, the way an OnEvent or a timer enters one. Nothing is
     // seeded from the graph's entry points, so the orphan source has to be reached some other
     // way or its consumer's required input goes missing.
-    let mut order = Vec::new();
-    let mut on_node = |id: u32| order.push(id);
-    let mut on_log = |_: u32, _: &str, _: u128| {};
-    let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_subpath_eventful(
-        &g,
-        &sys,
-        switch,
-        PortValues::new(),
-        &mut on_node,
-        &mut |_: u32, _: &str| {},
-        &mut on_log,
-        &mut emit,
-    )
-    .expect("the sub-run must not fail");
+    let order = order_through(&g, &sys, Some((switch, PortValues::new())))
+        .expect("the sub-run must not fail");
 
     assert!(
         order.contains(&taken),
@@ -393,21 +448,7 @@ fn the_orphan_source_is_read_at_the_moment_its_consumer_runs() {
         .unwrap()
         .insert("greeting".into(), PortValue::Text("other".into()));
 
-    let mut order = Vec::new();
-    let mut on_node = |id: u32| order.push(id);
-    let mut on_log = |_: u32, _: &str, _: u128| {};
-    let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_subpath_eventful(
-        &g,
-        &sys,
-        switch,
-        PortValues::new(),
-        &mut on_node,
-        &mut |_: u32, _: &str| {},
-        &mut on_log,
-        &mut emit,
-    )
-    .expect("runs");
+    let order = order_through(&g, &sys, Some((switch, PortValues::new()))).expect("runs");
 
     assert!(
         !order.contains(&taken),
@@ -495,14 +536,7 @@ fn the_engine_reports_which_arm_fired_not_which_node_was_reached() {
     wire(&mut g, gate, "true", target, "exec_in");
     wire(&mut g, gate, "false", target, "exec_in");
 
-    let sys = test_ctx();
-    let mut arms: Vec<(u32, String)> = Vec::new();
-    let mut on_node = |_: u32| {};
-    let mut on_arm = |nid: u32, port: &str| arms.push((nid, port.to_string()));
-    let mut on_log = |_: u32, _: &str, _: u128| {};
-    let mut emit = |_: &str, _: &PortValues| {};
-    super::engine::run_dag_eventful(&g, &sys, &mut on_node, &mut on_arm, &mut on_log, &mut emit)
-        .expect("runs");
+    let arms = arms_fired(&g);
 
     let from_gate: Vec<&String> = arms
         .iter()
