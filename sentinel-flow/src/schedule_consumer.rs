@@ -104,9 +104,14 @@ fn process(state: &Arc<AppState>, job: work_queue::Job) {
         work_queue::mark_failed_blocking(&state.db, job.id, "missing/!uuid graph", 1);
         return;
     };
-    let node_id = job.payload.get("node").and_then(|v| v.as_u64()).map(|n| n as u32);
+    let node_id = job
+        .payload
+        .get("node")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
     // Read the LIVE graph so an edit / disable since the job was enqueued takes effect.
-    let Some(g) = state::find_graph(&state.store, job.tenant_id, graph_id).filter(|g| g.meta.enabled)
+    let Some(g) =
+        state::find_graph(&state.store, job.tenant_id, graph_id).filter(|g| g.meta.enabled)
     else {
         // graph gone or disabled → drop; reconcile re-arms if it comes back enabled
         work_queue::mark_done_blocking(&state.db, job.id);

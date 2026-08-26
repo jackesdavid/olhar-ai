@@ -219,7 +219,11 @@ async fn signup(
     // parameter on `provision_tenant_with_admin`, which is shared with the invite and master paths
     // that have no browser to ask. Best-effort: an unset locale falls back to English, and failing
     // a signup over it would be absurd.
-    if let Some(tag) = b.locale.as_deref().map(app_core::notification::templates::Lang::from_tag) {
+    if let Some(tag) = b
+        .locale
+        .as_deref()
+        .map(app_core::notification::templates::Lang::from_tag)
+    {
         if let Err(e) = sqlx::query("UPDATE users SET locale = $1 WHERE id = $2")
             .bind(tag.as_tag())
             .bind(user_id)
@@ -986,7 +990,10 @@ async fn create_invite(
     auth::require(&c, "users.manage")?;
     let tid = tenant_ctx(&c)?;
     let by = c.sub.parse::<Uuid>().ok();
-    let email = b.email.map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
+    let email = b
+        .email
+        .map(|e| e.trim().to_lowercase())
+        .filter(|e| !e.is_empty());
     if let Some(e) = &email {
         if !e.contains('@') {
             return Err(err(StatusCode::BAD_REQUEST, "valid email required"));
@@ -1052,9 +1059,7 @@ async fn accept_invite(
                 StatusCode::GONE,
                 "this invite has expired — ask for a new one",
             ),
-            AcceptError::EmailTaken => {
-                err(StatusCode::CONFLICT, "that address is already in use")
-            }
+            AcceptError::EmailTaken => err(StatusCode::CONFLICT, "that address is already in use"),
             AcceptError::Db(m) => err(StatusCode::INTERNAL_SERVER_ERROR, m),
         })?;
 
@@ -1067,9 +1072,15 @@ async fn accept_invite(
 
     let hash =
         auth::hash_password(&b.password).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let uid = store::create_user(&st.pool, Some(claimed.tenant_id), &email, Some(&hash), false)
-        .await
-        .map_err(db_err)?;
+    let uid = store::create_user(
+        &st.pool,
+        Some(claimed.tenant_id),
+        &email,
+        Some(&hash),
+        false,
+    )
+    .await
+    .map_err(db_err)?;
     for r in claimed.role_ids {
         store::grant_role(&st.pool, uid, r).await.map_err(db_err)?;
     }
@@ -1080,7 +1091,9 @@ async fn accept_invite(
     })
     .await;
 
-    let perms = store::effective_perms(&st.pool, uid).await.map_err(db_err)?;
+    let perms = store::effective_perms(&st.pool, uid)
+        .await
+        .map_err(db_err)?;
     let claims = Claims {
         sub: uid.to_string(),
         tid: Some(claimed.tenant_id.to_string()),

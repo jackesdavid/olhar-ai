@@ -25,8 +25,8 @@ use super::{blocking, err, tenant_of, ApiErr};
 use crate::auth::{self, UserClaims};
 use crate::{store, AppState};
 use app_core::workflows::domain::AsKind;
-use app_core::workflows::domain::NodeExt;
 use app_core::workflows::domain::GraphExt;
+use app_core::workflows::domain::NodeExt;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -561,7 +561,10 @@ async fn cron_next(
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let out = blocking(move || {
-        let Some(g) = workflows::repo::load(&db, tid).into_iter().find(|g| g.id == id) else {
+        let Some(g) = workflows::repo::load(&db, tid)
+            .into_iter()
+            .find(|g| g.id == id)
+        else {
             return serde_json::json!({ "enabled": false, "nodes": [] });
         };
         let now = chrono::Utc::now();
@@ -599,7 +602,10 @@ async fn device_gate_pending(
     let tid = tenant_of(&c)?;
     let db = st.db.clone();
     let out = blocking(move || {
-        let Some(g) = workflows::repo::load(&db, tid).into_iter().find(|g| g.id == id) else {
+        let Some(g) = workflows::repo::load(&db, tid)
+            .into_iter()
+            .find(|g| g.id == id)
+        else {
             return serde_json::json!({ "nodes": [] });
         };
         let nodes: Vec<Value> = g
@@ -607,8 +613,9 @@ async fn device_gate_pending(
             .iter()
             .filter(|n| n.kind == WfNodeKind::DeviceGate)
             .filter_map(|n| {
-                let expires_at =
-                    app_core::workflows::device_gate::pending_deadline_for_node(&db, tid, g.id, n.id)?;
+                let expires_at = app_core::workflows::device_gate::pending_deadline_for_node(
+                    &db, tid, g.id, n.id,
+                )?;
                 Some(serde_json::json!({ "node": n.id, "expires_at": expires_at }))
             })
             .collect();
@@ -695,7 +702,13 @@ async fn instance_values(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node").to_string())
+                        .unwrap_or_else(|| {
+                            n.kind
+                                .as_kind()
+                                .map(|k| k.label())
+                                .unwrap_or("unknown node")
+                                .to_string()
+                        })
                 });
                 json!({ "node_id": nid, "label": label, "values": Value::Object(values) })
             })
@@ -1042,7 +1055,13 @@ fn to_summary(g: &WfGraph) -> TemplateSummary {
         name: g.name.clone(),
         description: g.meta.description.clone(),
         global: g.meta.global,
-        inputs: g.meta.variables.iter().filter(|v| v.param).cloned().collect(),
+        inputs: g
+            .meta
+            .variables
+            .iter()
+            .filter(|v| v.param)
+            .cloned()
+            .collect(),
     }
 }
 
@@ -1246,7 +1265,10 @@ async fn set_instance_scope(
             "per_camera" => InstanceScope::PerCamera,
             other => return Err(format!("unknown instance scope '{other}'")),
         };
-        wf.graph_mut(id).ok_or("graph not found")?.meta.instance_scope = scope;
+        wf.graph_mut(id)
+            .ok_or("graph not found")?
+            .meta
+            .instance_scope = scope;
         Ok(())
     })
     .await?;
@@ -1497,7 +1519,6 @@ async fn save_graph(
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }
-
 
 #[derive(Deserialize)]
 struct AddEdgeReq {

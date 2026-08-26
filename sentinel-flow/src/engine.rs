@@ -261,8 +261,19 @@ fn execute_run(
     }
     let graph_id = graph.id;
     let debug = graph.meta.debug;
-    let labels: std::collections::HashMap<u32, &'static str> =
-        graph.nodes.iter().map(|n| (n.id, n.kind.as_kind().map(|k| k.label()).unwrap_or("unknown node"))).collect();
+    let labels: std::collections::HashMap<u32, &'static str> = graph
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.id,
+                n.kind
+                    .as_kind()
+                    .map(|k| k.label())
+                    .unwrap_or("unknown node"),
+            )
+        })
+        .collect();
     // Owned, not `&'static str`: a kind's slug now comes from the stored document rather than
     // from an enum, and a document can name a kind this build does not have a constant for.
     let slugs: std::collections::HashMap<u32, String> = graph
@@ -907,7 +918,6 @@ mod tests {
         assert_eq!(total_in_flight(&a), 4);
     }
 }
-
 
 /// Fires a graph's events onto this runtime's bus.
 ///

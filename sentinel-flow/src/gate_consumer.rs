@@ -22,7 +22,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use app_core::workflows::device_gate::{self, GateState};
-use app_core::workflows::domain::{DEVICE_GATE_FACTOR, DEVICE_GATE_VERDICT, TriggerSource};
+use app_core::workflows::domain::{TriggerSource, DEVICE_GATE_FACTOR, DEVICE_GATE_VERDICT};
 use app_core::workflows::{PortValue, PortValues};
 
 use crate::state::AppState;

@@ -57,7 +57,22 @@ fn order_here(g: &Graph, sys: &ToolContext) -> Result<Vec<u32>, String> {
 /// The engine's scheduler, over the same graph and the same node implementations.
 fn order_engine(g: &Graph, sys: ToolContext) -> Result<Vec<u32>, String> {
     let rec = Arc::new(Order::default());
-    let host = SentinelHost::watching(sys, Box::new(RecRef(rec.clone())));
+    // The deferral of pure sources is this product's, not the engine's — the engine reports every
+    // node it runs and lets the host decide what that is worth. Wrapping the recorder here is what
+    // makes the comparison fair: the driver's `on_node` is ALREADY deferred, so without this the
+    // two would differ on every graph containing a `GetVariable`, and the difference would be the
+    // harness rather than the schedulers.
+    let host = SentinelHost::watching(
+        sys,
+        Box::new(super::observer::DeferringObserver::new(
+            g,
+            RecRef(rec.clone()),
+            |n| {
+                crate::workflows::domain::AsKind::as_kind(&n.kind)
+                    .is_some_and(|k| k.is_pure_source())
+            },
+        )),
+    );
     ggraph_core::run(
         g,
         super::registry::registry(),
@@ -294,5 +309,49 @@ mod tests {
             json!({ "message": "item", "level": "info", "on_screen": false });
         x.wire(each, "loop_body", body, "exec_in").unwrap();
         agree("loop", &x);
+    }
+
+    /// A pure source on each arm of a branch — the shape of #115 and #205.
+    ///
+    /// Both sources activate: that is deliberate and load-bearing, because a sub-run entering
+    /// halfway still has to find its variables seeded (#114). Only one of them was ever read, and
+    /// only that one may reach a person. Until the deferral moved out of the driver this shape
+    /// could not be compared at all: the driver reported the surviving source and the engine
+    /// reported both, so any graph with a `GetVariable` in it was outside the oracle.
+    #[test]
+    fn a_source_on_a_dead_arm_reaches_nobody() {
+        let mut gr = g("source on a dead arm");
+        let gate = gr.add(NodeKind::If, 0, 0);
+        gr.node_mut(gate).unwrap().config["condition"] = json!(false);
+
+        let get_dead = gr.add(NodeKind::GetVariable, 0, 0);
+        gr.node_mut(get_dead).unwrap().config["variable"] = json!("a");
+        gr.node_mut(get_dead).unwrap().config["type"] = json!("text");
+        let fmt_dead = gr.add(NodeKind::Format, 0, 0);
+        gr.node_mut(fmt_dead).unwrap().config["template"] = json!("{p1}");
+        gr.wire(gate, "true", fmt_dead, "exec_in").unwrap();
+        gr.wire(get_dead, "value", fmt_dead, "p1").unwrap();
+
+        let get_live = gr.add(NodeKind::GetVariable, 0, 0);
+        gr.node_mut(get_live).unwrap().config["variable"] = json!("b");
+        gr.node_mut(get_live).unwrap().config["type"] = json!("text");
+        let fmt_live = gr.add(NodeKind::Format, 0, 0);
+        gr.node_mut(fmt_live).unwrap().config["template"] = json!("{p1}");
+        gr.wire(gate, "false", fmt_live, "exec_in").unwrap();
+        gr.wire(get_live, "value", fmt_live, "p1").unwrap();
+
+        agree("source on a dead arm", &gr);
+
+        // And say out loud what "agree" alone would not: that they agree on the RIGHT answer, not
+        // merely on the same one.
+        let seen = order_engine(&gr, test_ctx()).expect("the engine runs it");
+        assert!(
+            !seen.contains(&get_dead),
+            "the source on the arm nobody took must not reach a person: {seen:?}"
+        );
+        assert!(
+            seen.contains(&get_live),
+            "the source that was read must: {seen:?}"
+        );
     }
 }

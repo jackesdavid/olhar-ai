@@ -276,14 +276,15 @@ async fn download(
     let path = format!("/recording/{}", urlencoding::encode(&rec.clip_id));
     // 120s to match the edge's own read timeout: a clip that takes longer than that to hand over
     // has not failed here, and a shorter deadline would report someone else's slowness as ours.
-    let proxied = app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 120)
-        .await
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_GATEWAY,
-                "no edge box connected for this tenant",
-            )
-        })?;
+    let proxied =
+        app_core::edge_commands::edge_http_via_sse(&st.pool, tid, "GET", &path, None, 120)
+            .await
+            .ok_or_else(|| {
+                err(
+                    StatusCode::BAD_GATEWAY,
+                    "no edge box connected for this tenant",
+                )
+            })?;
 
     let (status, bytes) = proxied.map_err(|e| {
         log::error!("edge clip fetch {} via sse: {e}", rec.clip_id);

@@ -389,14 +389,17 @@ async fn portal(
     let db = st.db.clone();
     let url = blocking(move || {
         let gw = payments::active_gateway().ok_or("no payment provider configured")?;
-        let customer =
-            payments::customer_ref(&db, tid, gw.provider()).ok_or("no customer with the provider")?;
+        let customer = payments::customer_ref(&db, tid, gw.provider())
+            .ok_or("no customer with the provider")?;
         let return_url = std::env::var("APP_ORIGIN")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "https://app.olharai.com".to_string());
-        gw.manage_url(&customer, &format!("{}/billing", return_url.trim_end_matches('/')))?
-            .ok_or_else(|| "this payment provider has no self-service portal".to_string())
+        gw.manage_url(
+            &customer,
+            &format!("{}/billing", return_url.trim_end_matches('/')),
+        )?
+        .ok_or_else(|| "this payment provider has no self-service portal".to_string())
     })
     .await?
     .map_err(|e| err(StatusCode::BAD_GATEWAY, e))?;
