@@ -66,8 +66,12 @@ needed to build; rustls, no OpenSSL). Frontend is SvelteKit + Svelte 5 runes + s
 - **The edge is the only camera-touching component.** Camera **credentials + RTSP URLs live
   only on the edge** (`cameras-cache.json`); they are NEVER persisted in the cloud DB (control
   stages creds in memory and hands them over once). Don't add cloud persistence for creds.
-- **Timestamps are RFC3339 `text`**, not `timestamptz` — sqlx is built without the chrono/time
-  feature, so it can't decode `timestamptz`. Generate with `app_core::timeutil::now_rfc3339()`.
+- **Existing timestamps are RFC3339 `text`** — 58 columns of them, written before sqlx had the
+  `chrono` feature enabled. They keep working; read them with `::text` and generate with
+  `app_core::timeutil::now_rfc3339()`. **New tables should use `timestamptz`**: the feature is on
+  now, so the reason those columns were text is gone. Converting the existing 58 is an
+  `ALTER TABLE ... USING col::timestamptz` (RFC3339 parses cleanly, no data lost) but it is a
+  migration against a running system, not a flag flip.
 - **Migrations**: `crates/app-core/migrations/NNNN_*.sql`, embedded via `sqlx::migrate!`, applied
   on `Db::connect` (control + flow boot). Additive; **ALWAYS `ls crates/app-core/migrations/` to get
   the next number** — no number is written here on purpose, because a stale one here once collided

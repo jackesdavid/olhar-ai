@@ -49,6 +49,10 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "migrate",
     "uuid",
+    # Enabled so NEW tables can use `timestamptz` instead of RFC3339 text. It does not migrate the
+    # 58 existing text columns — that is a data migration on a running system, not a feature flag —
+    # but it removes the reason they were text in the first place.
+    "chrono",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -94,5 +98,9 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "migrate",
     "uuid",
+    # Enabled so NEW tables can use `timestamptz` instead of RFC3339 text. It does not migrate the
+    # 58 existing text columns — that is a data migration on a running system, not a feature flag —
+    # but it removes the reason they were text in the first place.
+    "chrono",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
