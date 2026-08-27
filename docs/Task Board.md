@@ -18,6 +18,9 @@ kanban-plugin: board
 	  - Plan: [[ai-vision-node-ideas]]
 
 
+- [ ] #208 Converter os 58 timestamps de texto para timestamptz
+	  - Plan: [[timestamps-to-timestamptz]]
+
 ## Bugs
 
 - [ ] #207 Time Gate keeps a keeper thread; Delay Trigger already knows better
