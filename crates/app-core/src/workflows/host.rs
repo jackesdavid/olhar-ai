@@ -223,6 +223,12 @@ impl UiObserver {
 }
 
 impl Observer for UiObserver {
+    /// In production a declaration defect is logged, never fatal: taking down a running
+    /// installation over a node returning one port too many is worse than the defect. The tests
+    /// are where it fails loudly.
+    fn defect(&self, node: u32, message: &str) {
+        tracing::error!(node, %message, "node declaration defect");
+    }
     fn ui(&self, _node: u32, event: UiEvent) {
         let _ = match event {
             UiEvent::Image { label, bytes } => self.tx.send(ToolUiEvent::Snapshot {

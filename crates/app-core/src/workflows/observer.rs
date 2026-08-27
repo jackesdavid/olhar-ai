@@ -98,6 +98,14 @@ impl<O: Observer> DeferringObserver<O> {
 }
 
 impl<O: Observer> Observer for DeferringObserver<O> {
+    /// Forwarded immediately, never deferred.
+    ///
+    /// This observer holds back pure sources so they light next to the node that read them. A
+    /// defect is not a run event — it is a bug report about the node's declaration, and holding it
+    /// against a ping that may never arrive would drop it silently.
+    fn defect(&self, node: u32, message: &str) {
+        self.inner.defect(node, message);
+    }
     fn node_started(&self, node: u32) {
         let release: Vec<u32> = {
             let mut h = self.held.lock().unwrap();
@@ -192,6 +200,9 @@ mod tests {
     struct Recorder(Mutex<Vec<String>>);
 
     impl Observer for Recorder {
+        fn defect(&self, node: u32, _message: &str) {
+            self.0.lock().unwrap().push(format!("defect:{node}"));
+        }
         fn node_started(&self, node: u32) {
             self.0.lock().unwrap().push(format!("start:{node}"));
         }
@@ -321,6 +332,21 @@ mod tests {
             seen.iter().filter(|s| **s == format!("line:{get}")).count(),
             1,
             "one Console line for the whole run"
+        );
+    }
+
+    /// A wrapping observer that forgets to forward a method silently drops it, and the symptom is
+    /// a check that appears to find nothing. This one dropped `defect` when it was added, which is
+    /// exactly how the engine's new declaration check looked dead in this crate.
+    #[test]
+    fn the_wrapper_forwards_a_defect_instead_of_swallowing_it() {
+        let g: Graph<SentinelMeta> = Graph::new("empty");
+        let o = deferring(&g);
+        o.defect(7, "a node declared one thing and did another");
+        assert_eq!(
+            o.inner().seen(),
+            vec!["defect:7"],
+            "a defect must reach the wrapped observer immediately"
         );
     }
 }

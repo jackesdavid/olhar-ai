@@ -43,6 +43,14 @@ struct Recorder {
 }
 
 impl Observer for Recorder {
+    /// A declaration defect fails the test where it happens, not three screens later.
+    ///
+    /// The engine reports rather than asserts, because it cannot pick the severity for every
+    /// consumer. Here the severity is obvious: a node whose declared ports disagree with what it
+    /// does is a bug we want to hear about while writing it.
+    fn defect(&self, node: u32, message: &str) {
+        panic!("node {node}: {message}");
+    }
     fn node_started(&self, node: u32) {
         self.nodes.lock().unwrap().push(node);
     }
@@ -60,6 +68,9 @@ impl Observer for Recorder {
 struct Shared(Arc<Recorder>);
 
 impl Observer for Shared {
+    fn defect(&self, node: u32, message: &str) {
+        self.0.defect(node, message);
+    }
     fn node_started(&self, node: u32) {
         self.0.node_started(node);
     }

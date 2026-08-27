@@ -186,6 +186,9 @@ fn order_through(
     #[derive(Default)]
     struct Order(Mutex<Vec<u32>>);
     impl Observer for Order {
+        fn defect(&self, node: u32, message: &str) {
+            panic!("node {node}: {message}");
+        }
         fn node_started(&self, node: u32) {
             self.0.lock().unwrap().push(node);
         }
@@ -193,6 +196,9 @@ fn order_through(
     }
     struct Ref(Arc<Order>);
     impl Observer for Ref {
+        fn defect(&self, node: u32, message: &str) {
+            self.0.defect(node, message);
+        }
         fn node_started(&self, node: u32) {
             self.0.node_started(node);
         }
@@ -223,6 +229,9 @@ fn arms_fired(g: &Graph) -> Vec<(u32, String)> {
     #[derive(Default)]
     struct Arms(Mutex<Vec<(u32, String)>>);
     impl Observer for Arms {
+        fn defect(&self, node: u32, message: &str) {
+            panic!("node {node}: {message}");
+        }
         fn arm(&self, node: u32, port: &str) {
             self.0.lock().unwrap().push((node, port.to_string()));
         }
@@ -230,6 +239,9 @@ fn arms_fired(g: &Graph) -> Vec<(u32, String)> {
     }
     struct Ref(Arc<Arms>);
     impl Observer for Ref {
+        fn defect(&self, node: u32, message: &str) {
+            self.0.defect(node, message);
+        }
         fn arm(&self, node: u32, port: &str) {
             self.0.arm(node, port);
         }
