@@ -137,6 +137,8 @@
     /** For a list: what ONE of its elements is. Declared, because a product's list type is a name
      *  the engine cannot read an element off. */
     element?: string;
+    /** One sentence on what this port is for — prompt surface for a model, a tooltip for a person. */
+    about?: string;
   };
   type CatKind = {
     slug: string;
@@ -1321,6 +1323,16 @@
   // Control-flow (exec) ports are white. Every node has one `exec_in` pin on the
   // left header; exec OUTPUTS (usually `exec_out`, but `true`/`false` for If) stack
   // down the right edge from the header.
+  // What hovering a port says: its type, what it accepts, and what it is for. A type tells you
+  // whether a wire may be drawn; this tells you whether it should — and two ports of one type that
+  // mean different things is exactly where a person and a model both go wrong.
+  function portTip(p: CatPort): string {
+    const kind = p.accepts_family ? `any ${p.type}` : p.type;
+    const of = p.element ? ` of ${p.element}` : "";
+    const head = `${p.name}${p.required ? " *" : ""} — ${kind}${of}`;
+    return p.about ? `${head}\n${p.about}` : head;
+  }
+
   const EXEC_IN_NAME = "exec_in";
   function portOf(node: Node, port: string, side: "in" | "out"): CatPort | undefined {
     const k = effectiveKind(node);
@@ -4387,7 +4399,7 @@
                       class="cursor-pointer transition-all wf-port"
                       onclick={() => clickOutPort(n, p.name)}
                       role="presentation"
-                    />
+                    ><title>{portTip(p)}</title></circle>
                     {#if multi}
                       <text
                         x={nw - 9}
@@ -4416,7 +4428,7 @@
                       class="cursor-pointer wf-port"
                       onclick={() => clickInPort(n, p.name)}
                       role="presentation"
-                    />
+                    ><title>{portTip(p)}</title></circle>
                     <!-- Typed by hand, not wired (#107). A small core in the port's own type
                          colour: it reads as "this one is set" at a glance, stays distinct from a
                          wired port (which is filled edge to edge) and from required-empty (red

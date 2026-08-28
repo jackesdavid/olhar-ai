@@ -1,7 +1,7 @@
 export type PortType =
   | "text" | "num" | "bool" | "image" | "recipient" | "dictionary" | "table" | "embedding" | "file" | "exec"
   | "text_array" | "num_array" | "person_array" | "face_array" | "person" | "face" | "camera" | "bbox"
-  | "region" | "tracked_object" | "tracked_object_array" | "any";
+  | "region" | "tracked_object" | "tracked_object_array" | "file_ref" | "any";
 
 export const portColor: Record<PortType, string> = {
   text: "#60a5fa",
@@ -13,6 +13,9 @@ export const portColor: Record<PortType, string> = {
   table: "#5eead4",
   embedding: "#a78bfa",
   file: "#fb923c",
+  // A handle to a file, not the file: the same family as `file`, a shade back. It travels as text
+  // and is not text — a path on a disk is text too, and the two are not interchangeable.
+  file_ref: "#fdba74",
   exec: "#f4f4f5",
   text_array: "#93c5fd",
   num_array: "#fb923c",
