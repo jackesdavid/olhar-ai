@@ -23,7 +23,9 @@ type RawGraph = {
   description?: string;
   enabled?: boolean;
   group?: string;
+  /** Absent from a list row: the payload carries names. `node_count` is what the server sends. */
   nodes?: unknown[];
+  node_count?: number;
 };
 
 /** Every workflow in the tenant, newest API shape flattened to what a button needs. */
@@ -35,7 +37,7 @@ export async function listWorkflows(): Promise<WorkflowSummary[]> {
     description: g.description ?? "",
     enabled: !!g.enabled,
     group: g.group ?? "",
-    nodes: (g.nodes ?? []).length,
+    nodes: g.node_count ?? (g.nodes ?? []).length,
   }));
 }
 

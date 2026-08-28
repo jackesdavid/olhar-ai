@@ -16,6 +16,7 @@ mod golden;
 pub mod host;
 pub mod node;
 pub mod observer;
+pub mod readiness;
 pub mod registry;
 pub mod repo;
 pub mod run;

@@ -97,6 +97,7 @@ export const workflowEditor = {
     pickOutputFirst: "Pick an output port first, then this input.",
     incompatibleWire: "These ports cannot be connected.",
     duplicateNodeIds: "Two nodes shared an id — the later one was moved. Save to keep the repair.",
+    graphLoadFailed: "That workflow could not be loaded.",
     alreadyWired: "Those pins are already wired.",
     untitled: "Untitled",
     // ---- run-button tooltips ----
@@ -299,6 +300,7 @@ export const workflowEditor = {
     pickOutputFirst: "Escolha uma porta de saída primeiro, depois esta entrada.",
     incompatibleWire: "Estas portas não podem ser ligadas.",
     duplicateNodeIds: "Dois nós partilhavam um id — o segundo foi movido. Grave para manter a correção.",
+    graphLoadFailed: "Não foi possível carregar esse fluxo.",
     alreadyWired: "Esses pinos já estão conectados.",
     untitled: "Sem título",
     // ---- run-button tooltips ----

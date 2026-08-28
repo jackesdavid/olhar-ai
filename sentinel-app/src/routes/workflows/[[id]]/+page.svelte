@@ -229,8 +229,17 @@
     instance_scope?: "Single" | "PerCamera"; // what the graph runs one of (#95)
     run_orphans?: boolean;
     debug?: boolean;
+    // Present once a graph is OPEN. A list row arrives without them: the payload carries names,
+    // and `hydrate` fetches the document on open. The three readers below check before they walk.
     nodes: Node[];
     edges: Edge[];
+    /** Computed by the server for a row whose document has not been fetched — it knows the ports a
+     *  node actually has, which the catalogue's default configs cannot answer for. Recomputed
+     *  locally once the graph is open, so a badge follows an edit instead of the last save. */
+    runnable?: boolean;
+    unfilled?: boolean;
+    /** The graph's `on_event` nodes, so a row can name what it runs on without the whole document. */
+    triggers?: Node[];
     next_id?: number; // server-assigned next node id; client mints ids from here between saves (#122)
     viewport?: { x: number; y: number; zoom: number };
     edge_vias?: Record<string, [number, number][]>;
@@ -1199,6 +1208,7 @@
   // opts into running orphans. With no edges and orphans off, every node is
   // skipped, so a run is a no-op and Run is disabled.
   function canRun(g: Graph): boolean {
+    if (!Array.isArray(g.edges)) return g.runnable ?? false; // a list row: the server answered
     return (g.run_orphans ?? false) || g.edges.length > 0;
   }
 
@@ -1244,6 +1254,7 @@
     return (catalog[node.kind]?.inputs ?? []).filter((p) => p.required && !isFilled(node, p));
   }
   function graphHasUnfilled(g: Graph): boolean {
+    if (!Array.isArray(g.nodes)) return g.unfilled ?? false; // a list row: the server answered
     return g.nodes.some((n) => requiredUnfilled(n).length > 0);
   }
   // The open graph is runnable only when wired up AND every required input is set.
@@ -1755,9 +1766,39 @@
     return moved;
   }
 
+  /** The document a list row did not carry.
+   *
+   *  The list returns names, a trigger or two and two booleans — nodes and edges arrive here, once,
+   *  when a graph is opened. They are merged INTO the row rather than replacing it: the whole editor
+   *  reads the open graph through `graphs.find(...)`, and a fresh object would leave every reference
+   *  pointing at the entry it replaced. */
+  async function hydrate(id: string): Promise<boolean> {
+    const g = graphs.find((x) => x.id === id);
+    if (!g) return false;
+    if (Array.isArray(g.nodes)) return true; // opened before, still in hand
+    try {
+      Object.assign(g, await data.loadGraph<Graph>(id));
+      return Array.isArray(g.nodes);
+    } catch {
+      return false;
+    }
+  }
+
   // Apply an open-graph route to editor state (was the body of openGraph).
-  function applyGraph(id: string) {
+  /** The graph whose document is in flight, so the route effect re-running does not fetch it twice. */
+  let opening: string | null = null;
+  async function applyGraph(id: string) {
+    if (opening === id) return;
     saveViewport();
+    opening = id;
+    const ok = await hydrate(id);
+    opening = null;
+    if (($page.params.id ?? "") !== id) return; // navigated away while it was loading
+    if (!ok) {
+      toast.error(t.graphLoadFailed);
+      void goto("/workflows", { replaceState: true, keepFocus: true, noScroll: true });
+      return;
+    }
     selectedGraphId = id;
     selectedNodeId = null;
     pending = null;
@@ -1823,7 +1864,7 @@
         void goto("/workflows", { replaceState: true, keepFocus: true, noScroll: true });
         return;
       }
-      if (selectedGraphId !== id || view !== "editor") applyGraph(id);
+      if (selectedGraphId !== id || view !== "editor") void applyGraph(id);
     } else if (view !== "list") {
       showListView();
     }
@@ -2523,10 +2564,13 @@
   /** What the list column says a graph runs on. Reads the graph's cron NODES now — the row used to
    *  summarise a graph-level trigger, and a graph with two schedules had no honest way to say so. */
   function triggerSummary(g: Graph): string {
-    const crons = g.nodes.filter((n) => n.kind === "on_event" && nodeSource(n) === "cron");
+    // The trigger nodes, from the open document or from the row's own short list of them.
+    const events = Array.isArray(g.nodes)
+      ? g.nodes.filter((n) => n.kind === "on_event")
+      : (g.triggers ?? []);
+    const crons = events.filter((n) => nodeSource(n) === "cron");
     if (crons.length === 1) return scheduleSummary(nodeSchedule(crons[0]));
     if (crons.length > 1) return t.schedulesCount(crons.length);
-    const events = g.nodes.filter((n) => n.kind === "on_event");
     if (events.length > 0) return t.onEventSummary;
     return t.manualSummary;
   }

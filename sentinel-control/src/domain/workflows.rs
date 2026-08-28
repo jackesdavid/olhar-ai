@@ -322,13 +322,44 @@ struct ListQuery {
     group: Option<String>,
 }
 
-/// A graph plus its most-recent run summary, for the list. `last_run` is derived (not
-/// persisted on the graph) so it never pollutes the saved JSON blob.
+/// A graph SUMMARY plus its most-recent run. `last_run` is derived (not persisted on the graph) so
+/// it never pollutes the saved JSON blob.
 #[derive(serde::Serialize)]
 struct WfListItem {
     #[serde(flatten)]
-    graph: WfGraph,
+    graph: Value,
     last_run: Option<workflows::repo::LastRun>,
+}
+
+/// What a row needs, and not one field more.
+///
+/// The document used to travel whole, and nodes and edges were the overwhelming majority of it —
+/// carried so a row could answer two questions: is this wired up, and is anything required still
+/// empty. Both are answered here instead, once, off a graph already in memory.
+///
+/// The trigger nodes stay, because the row names what the graph runs on and there are one or two of
+/// them. The editor fetches the rest when it opens a graph.
+fn summarize(g: &WfGraph) -> Value {
+    let runnable = workflows::readiness::runnable(g);
+    let unfilled = workflows::readiness::has_unfilled(g);
+    let triggers: Vec<Value> = g
+        .nodes
+        .iter()
+        .filter(|n| n.kind.as_str() == "on_event")
+        .filter_map(|n| serde_json::to_value(n).ok())
+        .collect();
+    let mut d = serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(o) = d.as_object_mut() {
+        o.insert("runnable".into(), Value::Bool(runnable));
+        o.insert("unfilled".into(), Value::Bool(unfilled));
+        o.insert("triggers".into(), Value::Array(triggers));
+        // How many nodes, since the nodes themselves are gone and the mobile app shows the count.
+        o.insert("node_count".into(), Value::from(g.nodes.len()));
+        o.remove("nodes");
+        o.remove("edges");
+        o.remove("edge_vias");
+    }
+    d
 }
 
 async fn list(
@@ -365,7 +396,10 @@ async fn list(
             })
             .map(|g| {
                 let last_run = last.get(&g.id).cloned();
-                WfListItem { graph: g, last_run }
+                WfListItem {
+                    graph: summarize(&g),
+                    last_run,
+                }
             })
             .collect::<Vec<_>>()
     })

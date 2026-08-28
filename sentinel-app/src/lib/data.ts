@@ -643,6 +643,12 @@ export const data = {
     const tail = qs.toString();
     return api.get<T[]>(`/workflows${tail ? `?${tail}` : ""}`);
   },
+  /** One graph's document.
+   *
+   *  `loadGraphs` returns rows without nodes or edges — the overwhelming majority of a graph, and
+   *  the list draws none of it. This fetches the document for the one being opened. */
+  loadGraph: <T = unknown>(id: string): Promise<T> =>
+    api.get<T>(`/workflows/${id}/graph`),
   runStates: <T = unknown>(): Promise<T> => api.get<T>("/workflows/runs"),
   nodeCatalog: <T = unknown>(): Promise<T> => api.get<T>("/workflows/catalog"),
   createGraph: (name: string): Promise<string> =>
