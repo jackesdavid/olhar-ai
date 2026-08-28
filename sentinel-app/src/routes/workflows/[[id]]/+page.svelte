@@ -5874,6 +5874,10 @@
             {:else}
               <div class="space-y-1">
                 {#each logs as log, i (i)}
+                  <!-- A value with newlines in it was written for a person to read as lines: a
+                       rendered table, a JSON body. Collapsing it onto one truncated row loses
+                       exactly what the node went to the trouble of laying out. -->
+                  {@const block = log.summary?.includes("\n") ?? false}
                   <div class="flex items-center gap-2">
                     <span class="shrink-0 text-muted-foreground">{log.time}</span>
                     {#if log.level}
@@ -5889,8 +5893,15 @@
                     {:else}
                       <span class="w-16 shrink-0"></span>
                     {/if}
-                    <span class="truncate text-muted-foreground">{log.summary}</span>
+                    {#if !block}
+                      <span class="truncate text-muted-foreground">{log.summary}</span>
+                    {/if}
                   </div>
+                  {#if block}
+                    <!-- Monospace and scrolling on its own: columns only line up in a fixed-width
+                         font, and a wide table must not push the page sideways. -->
+                    <pre class="mb-1 ml-6 mt-0.5 overflow-x-auto rounded border border-border bg-muted/40 p-2 font-mono text-[11px] leading-snug text-foreground">{log.summary}</pre>
+                  {/if}
                 {/each}
               </div>
             {/if}
