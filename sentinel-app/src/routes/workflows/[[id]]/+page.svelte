@@ -125,6 +125,9 @@
     family?: string;
     /** This port asks for a FAMILY, so any member of it fits. */
     accepts_family?: boolean;
+    /** For a list: what ONE of its elements is. Declared, because a product's list type is a name
+     *  the engine cannot read an element off. */
+    element?: string;
   };
   type CatKind = {
     slug: string;
@@ -855,25 +858,45 @@
     return `${from}:${fromPort}` in liveArms;
   }
 
+  /// When each live node lit up, so a fast one is still visible and a slow one stays lit.
+  const liveSince = new Map<number, number>();
+
+  // A node lights when it STARTS and goes dark when it FINISHES. The minimum hold is a floor for a
+  // node that ran in two milliseconds — it was acting as a ceiling too, so a node that took forty
+  // seconds went dark after 0.7 of them and the canvas said nothing was happening.
   function markLive(nodeId: number) {
     runEnded = false;
     const prev = liveTimers.get(nodeId);
-    if (prev !== undefined) clearTimeout(prev); // re-trigger: restart the minimum hold
+    if (prev !== undefined) clearTimeout(prev);
+    liveTimers.delete(nodeId);
+    liveSince.set(nodeId, Date.now());
     liveNodes[nodeId] = true;
+  }
+
+  /// The node finished. Goes dark now, or when the floor is reached — whichever is later.
+  function markDone(nodeId: number) {
+    const lit = liveSince.get(nodeId);
+    if (lit === undefined) return; // never lit here: a log from a run this canvas did not watch
+    const left = Math.max(0, MIN_HIGHLIGHT_MS - (Date.now() - lit));
+    const prev = liveTimers.get(nodeId);
+    if (prev !== undefined) clearTimeout(prev);
     liveTimers.set(nodeId, setTimeout(() => {
       liveTimers.delete(nodeId);
-      // Keep the node lit if it's still the active node and the run hasn't ended.
-      if (!runEnded && act?.current === nodeId) return;
+      liveSince.delete(nodeId);
       delete liveNodes[nodeId];
-    }, MIN_HIGHLIGHT_MS));
+    }, left));
   }
   function endLive() {
     runEnded = true;
-    // Pending timers will fire and remove themselves. Nodes that outlasted their
-    // timer (stayed lit as the active node) need to be cleared right now.
+    // Everything still lit goes dark. A node whose finish never arrived — an overrun the scheduler
+    // abandoned — would otherwise stay lit for the rest of the session.
     for (const k of Object.keys(liveNodes)) {
       const id = Number(k);
-      if (!liveTimers.has(id)) delete liveNodes[id];
+      const t = liveTimers.get(id);
+      if (t !== undefined) clearTimeout(t);
+      liveTimers.delete(id);
+      liveSince.delete(id);
+      delete liveNodes[id];
     }
     for (const k of Object.keys(liveArms)) {
       if (!armTimers.has(k)) delete liveArms[k];
@@ -2000,6 +2023,7 @@
     const unLog = onEvent("workflow-log", (payload) => {
       const p = payload as { graph: string; node: number; label: string; message: string; ms: number };
       if (p.graph !== selectedGraphId) return; // only the open graph
+      markDone(p.node);
       const { label, message, ms } = p;
       logs = [
         { time: fmtTs(new Date().toISOString()), name: label, ok: true, summary: message, debug: true, ms },
@@ -3358,7 +3382,10 @@
     // A port asking for a family cannot know which member arrived, and `Ports::dynamic` never sees
     // an edge — so the wire writes it down. That is how `for_each` types the item it hands out.
     if (dst?.accepts_family && src) {
-      node.config = { ...node.config, [`${port}_type`]: src.type };
+      // The ELEMENT for a list, the type itself otherwise. A loop hands out one item at a time, and
+      // what it hands out is not readable from the list's name — `chunk_results` means nothing to
+      // the engine, so the wire is what writes it down.
+      node.config = { ...node.config, [`${port}_type`]: src.element ?? src.type };
     }
     markDirty();
   }
