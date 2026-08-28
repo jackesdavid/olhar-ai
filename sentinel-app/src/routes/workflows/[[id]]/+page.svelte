@@ -117,7 +117,15 @@
   import RegionPointsEditor from "../components/RegionPointsEditor.svelte";
 
   // ---- types (the serialized core shapes) ----------------------------------
-  type CatPort = { name: string; type: PortType; required: boolean };
+  type CatPort = {
+    name: string;
+    type: PortType;
+    required: boolean;
+    /** `scalar` | `list` | `unique` — every type is in exactly one. */
+    family?: string;
+    /** This port asks for a FAMILY, so any member of it fits. */
+    accepts_family?: boolean;
+  };
   type CatKind = {
     slug: string;
     label: string;
@@ -369,7 +377,7 @@
   // Context search: appears at wire-drop position, pre-filtered by the pending port type.
   let contextOpen = $state(false);
   let contextPos = $state({ x: 0, y: 0 });
-  let contextPending = $state<{ node: number; port: string; portType: PortType } | null>(null);
+  let contextPending = $state<{ node: number; port: string; portType: PortType; portFamily?: string } | null>(null);
   const contextPortType = $derived(contextPending?.portType ?? ("any" as PortType));
   // Edge via-points: purely visual bend handles stored in memory (key = "from:port:to:port").
   // The logical edge A→B is unchanged; the via dots just reposition the wire on screen.
@@ -2753,9 +2761,8 @@
         presetVariable && slug === "set_variable"
           ? [{ name: "value", type: presetVariable.type as PortType, required: true }]
           : (catalog[slug]?.inputs ?? []);
-      const matchPort =
-        candidateInputs.find((p) => p.type === cp.portType) ??
-        candidateInputs.find((p) => p.type === "any");
+      const fromPort: CatPort = { name: cp.port, type: cp.portType, required: false, family: cp.portFamily };
+      const matchPort = candidateInputs.find((p) => portsCompatible(fromPort, p));
       if (matchPort) {
         graph.edges.push({ from: cp.node, from_port: cp.port, to: id, to_port: matchPort.name });
         markDirty();
@@ -3296,6 +3303,20 @@
     // seed the wire's free end at the port so it starts with zero length
     cursor = { x: node.x + nodeW(node), y: outPortY(node, port) };
   }
+  // May this wire be drawn? The engine's rule, read off the catalog instead of copied: equal
+  // types, the wildcard, or a port that asks for a family taking one of its members. A backend
+  // that sends no family degrades to the first two, which is what this editor did before.
+  //
+  // It runs HERE and not only in the engine because a wire refused as it is drawn is a mistake
+  // that never reaches a stored graph — and until now every wrong wire was accepted on the canvas
+  // and refused at load, which is the one place nobody is looking.
+  function portsCompatible(from: CatPort | undefined, to: CatPort | undefined): boolean {
+    if (!from || !to) return true; // an unknown port is the catalog's problem, not this wire's
+    if (from.type === to.type) return true;
+    if (from.type === "any" || to.type === "any") return true;
+    return !!to.accepts_family && from.family === to.type;
+  }
+
   async function clickInPort(node: Node, port: string) {
     if (!graph || editLocked) return;
     const existing = graph.edges.findIndex((e) => e.to === node.id && e.to_port === port);
@@ -3320,12 +3341,25 @@
       toast.info(t.alreadyWired);
       return;
     }
+    const src = portOf(nodeById.get(from.node)!, from.port, "out");
+    const dst = portOf(node, port, "in");
+    if (!portsCompatible(src, dst)) {
+      pending = null;
+      toast.error(t.incompatibleWire, { description: `${src?.type} → ${dst?.type}` });
+      return;
+    }
+
     const newEdge: Edge = { from: from.node, from_port: from.port, to: node.id, to_port: port };
     pending = null;
     graph.edges.push(newEdge); // local + instant; persists on Save (#122)
     // Create Dictionary Row (#113): wiring a Dictionary Schema into `schema` bakes its columns
     // onto the row node so each column shows up as a typed input.
     if (node.kind === "dict_make_row" && port === "schema") bakeSchemaOnto(node, from.node);
+    // A port asking for a family cannot know which member arrived, and `Ports::dynamic` never sees
+    // an edge — so the wire writes it down. That is how `for_each` types the item it hands out.
+    if (dst?.accepts_family && src) {
+      node.config = { ...node.config, [`${port}_type`]: src.type };
+    }
     markDirty();
   }
   // Copy a Dictionary Schema node's columns onto a Create Dictionary Row node (#113), so its
@@ -3488,7 +3522,12 @@
         const pn = nodeById.get(p0.node);
         const portType = (pn ? effectiveKind(pn)?.outputs.find((p) => p.name === p0.port)?.type : null) ?? "any";
         dropAt = hoverWorld;
-        contextPending = { node: p0.node, port: p0.port, portType: portType as PortType };
+        contextPending = {
+          node: p0.node,
+          port: p0.port,
+          portType: portType as PortType,
+          portFamily: portOf(nodeById.get(p0.node)!, p0.port, "out")?.family,
+        };
         contextPos = { x: e.clientX, y: e.clientY };
         contextOpen = true;
       }
