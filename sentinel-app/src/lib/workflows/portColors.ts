@@ -59,6 +59,11 @@ export const CATEGORY_COLOR: Record<string, string> = {
   Utility: "#94a3b8", // slate
   Variables: "#94a3b8", // slate (get/set actually take their variable's type colour)
   Telegram: "#229ed9", // Telegram brand blue — the bot-reply family
+  // The report family: the violet the `block` port already carries, so a component and the wire it
+  // produces read as the same thing.
+  Report: "#c4b5fd",
+  Data: "#5eead4", // the table hue — these are the nodes that take a table apart
+  Document: "#fb923c", // file orange, matching the `file` port
 };
 
 // Maps a workflow node kind slug to its category colour — same logic as the

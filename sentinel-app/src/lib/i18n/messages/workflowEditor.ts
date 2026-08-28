@@ -96,6 +96,7 @@ export const workflowEditor = {
     comingSoon: (what: string) => `${what} — coming soon`,
     pickOutputFirst: "Pick an output port first, then this input.",
     incompatibleWire: "These ports cannot be connected.",
+    duplicateNodeIds: "Two nodes shared an id — the later one was moved. Save to keep the repair.",
     alreadyWired: "Those pins are already wired.",
     untitled: "Untitled",
     // ---- run-button tooltips ----
@@ -297,6 +298,7 @@ export const workflowEditor = {
     comingSoon: (what: string) => `${what} — em breve`,
     pickOutputFirst: "Escolha uma porta de saída primeiro, depois esta entrada.",
     incompatibleWire: "Estas portas não podem ser ligadas.",
+    duplicateNodeIds: "Dois nós partilhavam um id — o segundo foi movido. Grave para manter a correção.",
     alreadyWired: "Esses pinos já estão conectados.",
     untitled: "Sem título",
     // ---- run-button tooltips ----

@@ -200,10 +200,18 @@
     }}
   >
     <StatusDot state={dotState(g)} />
-    <span class="min-w-0 flex-1 truncate text-sm">
+    <!-- A real link, not a span inside a clickable div. The row's own handler is a convenience for
+         the space around it; this is what makes a tap work everywhere — a `click` on a plain
+         element is a thing some browsers deliver and some do not, and a link is a thing every one
+         of them opens. It also gets long-press, middle-click and a readable target for a reader. -->
+    <a
+      href="/workflows/{g.id}"
+      class="min-w-0 flex-1 truncate text-sm no-underline text-inherit"
+      onclick={(e) => e.stopPropagation()}
+    >
       <span class="font-medium">{g.name}</span>
       {#if g.description}<span class="ml-1.5 text-xs text-muted-foreground">— {g.description}</span>{/if}
-    </span>
+    </a>
     <span class="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:inline">{triggerSummary(g)}</span>
     <span class="hidden w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:inline">{g.nodes.length}</span>
     <span class="w-24 shrink-0 text-xs">

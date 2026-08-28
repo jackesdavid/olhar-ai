@@ -13,6 +13,15 @@
   import { toast } from "svelte-sonner";
 
   import Plus from "@lucide/svelte/icons/plus";
+  import Heading from "@lucide/svelte/icons/heading";
+  import Pilcrow from "@lucide/svelte/icons/pilcrow";
+  import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
+  import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+  import FileOutput from "@lucide/svelte/icons/file-output";
+  import FileText from "@lucide/svelte/icons/file-text";
+  import Columns3 from "@lucide/svelte/icons/columns-3";
+  import Rows3 from "@lucide/svelte/icons/rows-3";
+  import SquareDot from "@lucide/svelte/icons/square-dot";
   import Play from "@lucide/svelte/icons/play";
   import Save from "@lucide/svelte/icons/save";
   import Pause from "@lucide/svelte/icons/pause";
@@ -362,9 +371,8 @@
       saving = false;
     }
   }
-  // Backstop for leaving the editor by any OTHER path (a sidebar link, a browser back). Internal
-  // graph switches (openGraph/backToList) already save first, so `dirty` is false by the time this
-  // fires for them. A fire-and-forget save keeps the canvas from being lost. (#122)
+  // Every way of leaving the editor goes through here — a row, a sidebar link, the browser's back
+  // button. One place that saves, so leaving cannot depend on which way you left. (#122)
   beforeNavigate(() => {
     if (dirty && !saving) void save();
   });
@@ -1702,14 +1710,39 @@
   // The URL is the source of truth for which graph is open (/workflows/<id>).
   // openGraph / backToList only navigate; the $effect below applies the route to state,
   // so a refresh or a shared link lands straight in the right editor.
-  async function openGraph(id: string) {
-    if (dirty) await save(); // persist the current graph's canvas before switching (#122)
+  // Navigate, and let `beforeNavigate` below save what was open. Awaiting a save here was a second
+  // way to do the same thing and a way for the navigation never to happen: a save that failed or
+  // hung left the tap doing nothing at all, with nothing on screen to say why.
+  function openGraph(id: string) {
     void goto(`/workflows/${id}`, { keepFocus: true, noScroll: true });
   }
-  async function backToList() {
-    if (dirty) await save();
+  function backToList() {
     void goto("/workflows", { keepFocus: true, noScroll: true });
   }
+  /// Renumbers any node whose id another already took, and says so.
+  ///
+  /// The canvas is keyed by node id, so two nodes sharing one blank the entire page — a graph that
+  /// cannot be opened is a graph nobody can repair. The FIRST keeps the id, because the edges that
+  /// point at it were drawn for it; the later one is moved and marked dirty, so saving makes the
+  /// repair permanent.
+  function renumberDuplicates(g: Graph): number[] {
+    const seen = new Set<number>();
+    let next = Math.max(g.next_id ?? 1, ...g.nodes.map((n) => n.id + 1));
+    const moved: number[] = [];
+    for (const n of g.nodes) {
+      if (seen.has(n.id)) {
+        moved.push(n.id);
+        n.id = next++;
+      }
+      seen.add(n.id);
+    }
+    if (moved.length) {
+      g.next_id = next;
+      markDirty();
+    }
+    return moved;
+  }
+
   // Apply an open-graph route to editor state (was the body of openGraph).
   function applyGraph(id: string) {
     saveViewport();
@@ -1735,6 +1768,10 @@
       fetch(data.nodeStateUrl(id, n.id)).then((r) => (r.ok ? r.json() : null)).then((st) => {
         if (st && "value" in st) nodeValues = { ...nodeValues, [n.id]: st.value };
       }).catch(() => {});
+    }
+    const dup = graph ? renumberDuplicates(graph) : [];
+    if (dup.length) {
+      toast.warning(t.duplicateNodeIds, { description: dup.map((d) => `#${d}`).join(", ") });
     }
     logs = [];
     void loadConsoleLogs(id);
@@ -2923,6 +2960,10 @@
     Debug: Bug,
     Utility: Waypoints,
     Variables: Variable,
+    // One glyph for the family; the per-node ones below say which component it is.
+    Report: FileText,
+    Data: Table2,
+    Document: FileText,
   };
   function categoryIcon(n: Node): typeof Box {
     // Recording gets its own record/stop identity, distinct from the camera family.
@@ -2932,6 +2973,22 @@
     if (n.kind === "get_variable" || n.kind === "set_variable") return Variable;
     // AI Switch lives in the Control palette (it's a router) but is AI-powered — give it the AI glyph.
     if (n.kind === "ai_switch") return Sparkles;
+    // The report components: each says what it draws. A family that all looked alike made a canvas
+    // of six of them unreadable at a glance, which is the one thing an icon is for.
+    const own: Record<string, typeof Box> = {
+      report_heading: Heading,
+      report_paragraph: Pilcrow,
+      report_table: Table2,
+      report_bar_chart: BarChart3,
+      report_layout: LayoutGrid,
+      report_render: FileOutput,
+      table_schema: Columns3,
+      break_row: Rows3,
+      first_row: Rows3,
+      get_table_rows: Rows3,
+      cell: SquareDot,
+    };
+    if (own[n.kind]) return own[n.kind];
     return CATEGORY_ICON[catalog[n.kind]?.category ?? ""] ?? Box;
   }
   // Node-aware header colour: Get/Set Variable nodes take their variable's TYPE colour, so a
