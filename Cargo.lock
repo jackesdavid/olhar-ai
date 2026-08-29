@@ -1153,6 +1153,7 @@ dependencies = [
 [[package]]
 name = "ggraph-core"
 version = "0.1.0"
+source = "git+https://github.com/jackesdavid/graph-engine.git?tag=v0.24.1#b6cb915f4ccec5a986b0e7b0788e91612e1f3ac7"
 dependencies = [
  "plotters",
  "serde",
