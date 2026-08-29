@@ -71,11 +71,7 @@ mod tests {
         name: &str,
         ty: crate::workflows::domain::PortType,
     ) -> crate::workflows::domain::ResolvedPort {
-        crate::workflows::domain::ResolvedPort {
-            name: PortName::new(name),
-            ty,
-            required: false,
-        }
+        crate::workflows::domain::ResolvedPort::new(PortName::new(name), ty, false)
     }
 
     /// An Image-typed event field arrives base64 (JSON has no byte type) and must reach the graph
@@ -253,21 +249,9 @@ mod tests {
     #[test]
     fn literal_for_coerces_and_skips_empty() {
         let cfg = json!({ "camera": "front", "blank": "  ", "n": "7" });
-        let text = Port {
-            name: PortName::new_static("camera"),
-            ty: types::TEXT,
-            required: true,
-        };
-        let blank = Port {
-            name: PortName::new_static("blank"),
-            ty: types::TEXT,
-            required: false,
-        };
-        let num = Port {
-            name: PortName::new_static("n"),
-            ty: types::NUM,
-            required: true,
-        };
+        let text = Port::new(PortName::new_static("camera"), types::TEXT, true);
+        let blank = Port::new(PortName::new_static("blank"), types::TEXT, false);
+        let num = Port::new(PortName::new_static("n"), types::NUM, true);
         assert_eq!(literal_for(&cfg, text).unwrap().as_text(), Some("front"));
         assert!(literal_for(&cfg, blank).is_none());
         assert_eq!(literal_for(&cfg, num).unwrap().as_num(), Some(7));
@@ -277,16 +261,8 @@ mod tests {
     fn literal_for_parses_a_string_dictionary() {
         let cfg =
             json!({ "headers": { "Authorization": "Bearer x", "X-Env": "prod" }, "empty": {} });
-        let dict = Port {
-            name: PortName::new_static("headers"),
-            ty: types::DICTIONARY,
-            required: false,
-        };
-        let empty = Port {
-            name: PortName::new_static("empty"),
-            ty: types::DICTIONARY,
-            required: false,
-        };
+        let dict = Port::new(PortName::new_static("headers"), types::DICTIONARY, false);
+        let empty = Port::new(PortName::new_static("empty"), types::DICTIONARY, false);
         let got = literal_for(&cfg, dict).unwrap();
         let pairs = got.as_dict().unwrap();
         assert_eq!(pairs.len(), 2);

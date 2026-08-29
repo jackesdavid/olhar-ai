@@ -62,8 +62,11 @@
     instance_scope?: "Single" | "PerCamera";
     run_orphans?: boolean;
     debug?: boolean;
+    // Present once a graph is OPEN. A list row arrives without them — the payload carries names,
+    // and the editor fetches the document on open. Read `node_count` for the count, never `nodes`.
     nodes: Node[];
     edges: Edge[];
+    node_count?: number;
     next_id?: number;
     viewport?: { x: number; y: number; zoom: number };
     edge_vias?: Record<string, [number, number][]>;
@@ -213,7 +216,7 @@
       {#if g.description}<span class="ml-1.5 text-xs text-muted-foreground">— {g.description}</span>{/if}
     </a>
     <span class="hidden w-32 shrink-0 truncate text-xs text-muted-foreground md:inline">{triggerSummary(g)}</span>
-    <span class="hidden w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:inline">{g.nodes.length}</span>
+    <span class="hidden w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground sm:inline">{g.node_count ?? g.nodes?.length ?? 0}</span>
     <span class="w-24 shrink-0 text-xs">
       {#if st === "running"}
         <span class="inline-flex items-center gap-1 font-medium text-primary">

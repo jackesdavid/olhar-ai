@@ -99,11 +99,7 @@ impl NodeExt for GraphNode {
             // AI Extract: `value` typed per config.type (like a variable) + a static `found` bool.
             Some(NodeKind::AiExtract) => {
                 let mut ports = variable_port(&self.config, false);
-                ports.push(ResolvedPort {
-                    name: PortName::new("found".to_string()),
-                    ty: types::BOOL,
-                    required: false,
-                });
+                ports.push(ResolvedPort::new(PortName::new("found".to_string()), types::BOOL, false));
                 ports
             }
             Some(k) => k.output_ports().iter().cloned().collect(),
@@ -128,11 +124,7 @@ impl NodeExt for GraphNode {
         if self.kind == NodeKind::StringSwitch || self.kind == NodeKind::AiSwitch {
             let arms = string_switch_arms(&self.config);
             if arms.iter().any(|a| a == name) || name == "default" {
-                return Some(ResolvedPort {
-                    name: PortName::new(name.to_string()),
-                    ty: types::EXEC,
-                    required: false,
-                });
+                return Some(ResolvedPort::new(PortName::new(name.to_string()), types::EXEC, false));
             }
             return None;
         }
@@ -142,11 +134,7 @@ impl NodeExt for GraphNode {
             let valid =
                 (1..=arms.len()).any(|i| name == format!("arm_{i}").as_str()) || name == "default";
             if valid {
-                return Some(ResolvedPort {
-                    name: PortName::new(name.to_string()),
-                    ty: types::EXEC,
-                    required: false,
-                });
+                return Some(ResolvedPort::new(PortName::new(name.to_string()), types::EXEC, false));
             }
             return None;
         }

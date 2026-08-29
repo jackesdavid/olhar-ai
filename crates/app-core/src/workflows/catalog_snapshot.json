@@ -3,8 +3,10 @@
     {
       "category": "Alerts",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -13,41 +15,49 @@
       "label": "Last Alert",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "id",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "level",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "room",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "source",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "created_at",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -60,8 +70,10 @@
       "default_config": {
         "recipient": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -70,16 +82,19 @@
       "label": "Find Recipient",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "recipient",
           "required": false,
           "type": "recipient"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -96,18 +111,22 @@
         "source": "workflow",
         "timeout_secs": "15"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "room",
           "required": false,
           "type": "text"
@@ -116,21 +135,25 @@
       "label": "Create Alert",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "id",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -144,13 +167,16 @@
         "id": "",
         "timeout_secs": "35"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "id",
           "required": true,
           "type": "num"
@@ -159,16 +185,19 @@
       "label": "Send Alert",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -182,13 +211,16 @@
         "camera": "first",
         "timeout_secs": "10"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -197,31 +229,37 @@
       "label": "Snapshot",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "height",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -236,13 +274,16 @@
         "max_age_ms": "2000",
         "timeout_secs": "10"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -251,31 +292,37 @@
       "label": "Current Frame",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "age_ms",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "height",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -288,10 +335,12 @@
       "default_config": {
         "camera": ""
       },
+      "dynamic": true,
       "inputs": [],
       "label": "Find Camera",
       "outputs": [
         {
+          "family": "unique",
           "name": "camera",
           "required": false,
           "type": "camera"
@@ -302,8 +351,10 @@
     {
       "category": "Cameras",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -312,16 +363,19 @@
       "label": "Unpack Camera",
       "outputs": [
         {
+          "family": "scalar",
           "name": "id",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ip",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "name",
           "required": false,
           "type": "text"
@@ -336,8 +390,10 @@
         "name": "",
         "points": []
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "camera",
           "required": false,
           "type": "camera"
@@ -346,6 +402,7 @@
       "label": "Region",
       "outputs": [
         {
+          "family": "unique",
           "name": "region",
           "required": false,
           "type": "region"
@@ -359,13 +416,16 @@
         "camera": "first",
         "timeout_secs": "10"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -374,16 +434,19 @@
       "label": "Get Tracked Objects",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "objects",
           "required": false,
           "type": "tracked_object_array"
         },
         {
+          "family": "scalar",
           "name": "count",
           "required": false,
           "type": "num"
@@ -394,13 +457,16 @@
     {
       "category": "Vision",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "object",
           "required": true,
           "type": "tracked_object"
@@ -409,26 +475,31 @@
       "label": "Unpack Tracked Object",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "uuid",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "class",
           "required": false,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "zone",
           "required": false,
           "type": "text"
@@ -443,18 +514,22 @@
         "question": "",
         "timeout_secs": "65"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "question",
           "required": false,
           "type": "text"
@@ -463,16 +538,19 @@
       "label": "Describe Image",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "description",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -486,23 +564,28 @@
         "message": "",
         "timeout_secs": "35"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": true,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "recipient",
           "required": false,
           "type": "recipient"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
@@ -511,16 +594,19 @@
       "label": "Notify",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -536,23 +622,28 @@
         "p3": "",
         "template": "{p1} — {p2}"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "p1",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "p2",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "p3",
           "required": false,
           "type": "text"
@@ -561,11 +652,13 @@
       "label": "Format",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "text",
           "required": false,
           "type": "text"
@@ -578,8 +671,10 @@
       "default_config": {
         "seconds": "1"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -588,6 +683,7 @@
       "label": "Wait",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -604,28 +700,34 @@
         "timeout_secs": "35",
         "url": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "url",
           "required": true,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "headers",
           "required": false,
           "type": "dictionary"
         },
         {
+          "family": "unique",
           "name": "fields",
           "required": false,
           "type": "dictionary"
         },
         {
+          "family": "unique",
           "name": "file",
           "required": false,
           "type": "file"
@@ -634,21 +736,25 @@
       "label": "HTTP Post",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "status",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "response",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -659,13 +765,16 @@
     {
       "category": "Control",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "condition",
           "required": true,
           "type": "bool"
@@ -674,11 +783,13 @@
       "label": "Branch",
       "outputs": [
         {
+          "family": "unique",
           "name": "true",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "false",
           "required": false,
           "type": "exec"
@@ -691,13 +802,16 @@
       "default_config": {
         "items": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "items",
           "required": false,
           "type": "any"
@@ -706,21 +820,25 @@
       "label": "For Each",
       "outputs": [
         {
+          "family": "unique",
           "name": "loop_body",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "completed",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "item",
           "required": false,
           "type": "any"
         },
         {
+          "family": "scalar",
           "name": "index",
           "required": false,
           "type": "num"
@@ -731,8 +849,10 @@
     {
       "category": "Control",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -741,16 +861,19 @@
       "label": "Toggle",
       "outputs": [
         {
+          "family": "unique",
           "name": "a",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "b",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "is_a",
           "required": false,
           "type": "bool"
@@ -765,13 +888,16 @@
         "b": "0",
         "operator": "=="
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -780,6 +906,7 @@
       "label": "Compare",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -793,13 +920,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -808,6 +938,7 @@
       "label": "Less Than",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -821,13 +952,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -836,6 +970,7 @@
       "label": "Less Than or Equal",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -849,13 +984,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -864,6 +1002,7 @@
       "label": "Greater Than",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -877,13 +1016,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -892,6 +1034,7 @@
       "label": "Greater Than or Equal",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -905,13 +1048,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -920,6 +1066,7 @@
       "label": "Number Equal",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -933,13 +1080,16 @@
         "a": "0",
         "b": "0"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "num"
@@ -948,6 +1098,7 @@
       "label": "Number Not Equal",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -958,8 +1109,10 @@
     {
       "category": "Logic",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "value",
           "required": true,
           "type": "num"
@@ -968,6 +1121,7 @@
       "label": "Number to Text",
       "outputs": [
         {
+          "family": "scalar",
           "name": "text",
           "required": false,
           "type": "text"
@@ -978,8 +1132,10 @@
     {
       "category": "Logic",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "value",
           "required": true,
           "type": "bool"
@@ -988,6 +1144,7 @@
       "label": "Yes/No to Text",
       "outputs": [
         {
+          "family": "scalar",
           "name": "text",
           "required": false,
           "type": "text"
@@ -1002,18 +1159,22 @@
         "sensitivity": "2",
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image_a",
           "required": true,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "image_b",
           "required": true,
           "type": "image"
@@ -1022,21 +1183,25 @@
       "label": "Detect Motion",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "moved",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "score",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1053,13 +1218,16 @@
         "sensitivity": "2",
         "timeout_secs": "15"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -1068,21 +1236,25 @@
       "label": "Watch for Motion",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "moved",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "score",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1095,13 +1267,16 @@
       "default_config": {
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
@@ -1110,36 +1285,43 @@
       "label": "Detect People",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "count",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "unique",
           "name": "persons",
           "required": false,
           "type": "person_array"
         },
         {
+          "family": "scalar",
           "name": "width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "height",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1153,18 +1335,22 @@
         "class": "person",
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "class",
           "required": false,
           "type": "text"
@@ -1173,36 +1359,43 @@
       "label": "Detect Objects",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "count",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "unique",
           "name": "detections",
           "required": false,
           "type": "person_array"
         },
         {
+          "family": "scalar",
           "name": "width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "height",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1213,13 +1406,16 @@
     {
       "category": "Vision",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "person",
           "required": true,
           "type": "person"
@@ -1228,16 +1424,19 @@
       "label": "Unpack Person",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
@@ -1248,13 +1447,16 @@
     {
       "category": "Vision",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "detection",
           "required": true,
           "type": "person"
@@ -1263,16 +1465,19 @@
       "label": "Unpack Detection",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
@@ -1283,13 +1488,16 @@
     {
       "category": "Vision",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "face",
           "required": true,
           "type": "face"
@@ -1298,21 +1506,25 @@
       "label": "Unpack Face",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "landmarks",
           "required": false,
           "type": "num"
@@ -1326,13 +1538,16 @@
         "max_distance": "0.4",
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
@@ -1341,26 +1556,31 @@
       "label": "Recognize Person",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "person",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "person_id",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1373,18 +1593,22 @@
       "default_config": {
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
@@ -1393,21 +1617,25 @@
       "label": "Extract Face Embedding",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "embedding",
           "required": false,
           "type": "embedding"
         },
         {
+          "family": "scalar",
           "name": "dim",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1422,13 +1650,16 @@
         "timeout_secs": "15",
         "top_k": "5"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "embedding",
           "required": true,
           "type": "embedding"
@@ -1437,51 +1668,61 @@
       "label": "Recognize Face",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "person",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "person_id",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "unique",
           "name": "matches",
           "required": false,
           "type": "dictionary"
         },
         {
+          "family": "scalar",
           "name": "found",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "consistency",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "samples",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "margin",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ambiguous",
           "required": false,
           "type": "bool"
@@ -1496,68 +1737,82 @@
         "source": "snapshot",
         "timeout_secs": "15"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "embedding",
           "required": true,
           "type": "embedding"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "label",
           "required": false,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": false,
           "type": "camera"
         },
         {
+          "family": "scalar",
           "name": "confidence",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "face_width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "unique",
           "name": "kps",
           "required": false,
           "type": "landmarks"
         },
         {
+          "family": "scalar",
           "name": "blur",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "yaw",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "pitch",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "roll",
           "required": false,
           "type": "num"
@@ -1566,16 +1821,19 @@
       "label": "Store Face",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "stored",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "face_id",
           "required": false,
           "type": "text"
@@ -1591,48 +1849,58 @@
         "label": "",
         "room": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "room",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "category",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "label",
           "required": false,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": false,
           "type": "camera"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "frame_w",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "frame_h",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "duration_secs",
           "required": false,
           "type": "num"
@@ -1641,16 +1909,19 @@
       "label": "Record Presence",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "id",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1663,8 +1934,10 @@
       "default_config": {
         "event": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -1673,6 +1946,7 @@
       "label": "Send Event",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -1685,8 +1959,10 @@
       "default_config": {
         "event": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -1695,6 +1971,7 @@
       "label": "When Event",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -1709,18 +1986,22 @@
         "message": "",
         "on_screen": true
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "on_screen",
           "required": false,
           "type": "bool"
@@ -1729,6 +2010,7 @@
       "label": "Print",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -1741,13 +2023,16 @@
       "default_config": {
         "label": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
@@ -1756,6 +2041,7 @@
       "label": "Show Image",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -1768,8 +2054,10 @@
       "default_config": {
         "window_secs": "60"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -1778,16 +2066,19 @@
       "label": "Cooldown",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "elapsed_secs",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1803,18 +2094,22 @@
         "style": "box",
         "thickness": "2"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": true,
           "type": "bbox"
@@ -1823,21 +2118,25 @@
       "label": "Draw Detection Box",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": false,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1855,23 +2154,28 @@
         "text": "",
         "text_color": "#FFFFFF"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": true,
           "type": "bbox"
         },
         {
+          "family": "scalar",
           "name": "text",
           "required": false,
           "type": "text"
@@ -1880,16 +2184,19 @@
       "label": "Draw Text",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1902,18 +2209,22 @@
       "default_config": {
         "blur": "12"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
         },
         {
+          "family": "unique",
           "name": "bbox",
           "required": true,
           "type": "bbox"
@@ -1922,16 +2233,19 @@
       "label": "Blur Outside Box",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1942,13 +2256,16 @@
     {
       "category": "Vision",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": true,
           "type": "image"
@@ -1957,21 +2274,25 @@
       "label": "Image Size",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "width",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "height",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -1985,13 +2306,16 @@
         "a": false,
         "b": false
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "bool"
@@ -2000,6 +2324,7 @@
       "label": "And",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -2013,13 +2338,16 @@
         "a": false,
         "b": false
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "bool"
@@ -2028,6 +2356,7 @@
       "label": "Or",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -2040,8 +2369,10 @@
       "default_config": {
         "a": false
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "bool"
@@ -2050,6 +2381,7 @@
       "label": "Not",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -2063,13 +2395,16 @@
         "b": "",
         "operator": "eq"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "scalar",
           "name": "a",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "b",
           "required": false,
           "type": "text"
@@ -2078,6 +2413,7 @@
       "label": "Text Compare",
       "outputs": [
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "bool"
@@ -2093,13 +2429,16 @@
           "arm_2"
         ]
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": true,
           "type": "text"
@@ -2108,16 +2447,19 @@
       "label": "Text Switch",
       "outputs": [
         {
+          "family": "unique",
           "name": "arm_1",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "arm_2",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "default",
           "required": false,
           "type": "exec"
@@ -2130,13 +2472,16 @@
       "default_config": {
         "arms": []
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
@@ -2145,6 +2490,7 @@
       "label": "Camera Switch",
       "outputs": [
         {
+          "family": "unique",
           "name": "default",
           "required": false,
           "type": "exec"
@@ -2158,18 +2504,22 @@
         "question": "",
         "timeout_secs": "65"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
         },
         {
+          "family": "scalar",
           "name": "question",
           "required": false,
           "type": "text"
@@ -2178,11 +2528,13 @@
       "label": "AI Branch",
       "outputs": [
         {
+          "family": "unique",
           "name": "true",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "false",
           "required": false,
           "type": "exec"
@@ -2198,8 +2550,10 @@
         "text": "Comment",
         "width": 400
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2216,8 +2570,10 @@
         "size": "lg",
         "text": "Title"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2235,8 +2591,10 @@
         "text": "Description…",
         "width": 320
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2253,8 +2611,10 @@
         "text": "## Heading\n\n- point one\n- point two",
         "width": 340
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2271,13 +2631,16 @@
         "text_color": "#e5e7eb",
         "value": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
@@ -2286,6 +2649,7 @@
       "label": "Text",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2303,13 +2667,16 @@
         "size": 160,
         "value": 0
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "num"
@@ -2318,6 +2685,7 @@
       "label": "Gauge",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2330,18 +2698,22 @@
       "default_config": {
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
         },
         {
+          "family": "scalar",
           "name": "pre_roll_secs",
           "required": false,
           "type": "num"
@@ -2350,11 +2722,13 @@
       "label": "Start Recording",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "clip_id",
           "required": false,
           "type": "text"
@@ -2367,18 +2741,22 @@
       "default_config": {
         "timeout_secs": "15"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "camera",
           "required": true,
           "type": "camera"
         },
         {
+          "family": "scalar",
           "name": "clip_id",
           "required": false,
           "type": "text"
@@ -2387,6 +2765,7 @@
       "label": "Stop Recording",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2400,8 +2779,10 @@
         "extend_secs": 10,
         "wait_secs": 10
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2410,6 +2791,7 @@
       "label": "Time Gate",
       "outputs": [
         {
+          "family": "unique",
           "name": "out",
           "required": false,
           "type": "exec"
@@ -2423,8 +2805,10 @@
         "extend_secs": 10,
         "wait_secs": 10
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2433,11 +2817,13 @@
       "label": "Delay Trigger",
       "outputs": [
         {
+          "family": "unique",
           "name": "start",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "stop",
           "required": false,
           "type": "exec"
@@ -2451,18 +2837,22 @@
         "message": "",
         "ttl_secs": "600"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "recipient",
           "required": true,
           "type": "recipient"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": true,
           "type": "text"
@@ -2471,26 +2861,31 @@
       "label": "Device Gate",
       "outputs": [
         {
+          "family": "unique",
           "name": "positive",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "negative",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "failure",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "answered_by",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "factor",
           "required": false,
           "type": "text"
@@ -2504,10 +2899,12 @@
         "type": "text",
         "variable": ""
       },
+      "dynamic": true,
       "inputs": [],
       "label": "Get Variable",
       "outputs": [
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
@@ -2521,13 +2918,16 @@
         "type": "text",
         "variable": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": true,
           "type": "text"
@@ -2536,6 +2936,7 @@
       "label": "Set Variable",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2548,8 +2949,10 @@
       "default_config": {
         "variables": []
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -2558,6 +2961,7 @@
       "label": "Set Variables",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2570,6 +2974,7 @@
       "default_config": {
         "variables": []
       },
+      "dynamic": true,
       "inputs": [],
       "label": "Get Variables",
       "outputs": [],
@@ -2581,23 +2986,28 @@
         "message": "",
         "timeout_secs": "35"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "message",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "chat_id",
           "required": true,
           "type": "num"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
@@ -2606,16 +3016,19 @@
       "label": "Reply to Sender",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "queued",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
@@ -2629,18 +3042,22 @@
         "prompt": "",
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "prompt",
           "required": true,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "image",
           "required": false,
           "type": "image"
@@ -2649,16 +3066,19 @@
       "label": "AI Answer",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "response",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
@@ -2672,23 +3092,28 @@
         "caption": "",
         "timeout_secs": "120"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "clip_id",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "chat_id",
           "required": true,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "caption",
           "required": false,
           "type": "text"
@@ -2697,16 +3122,19 @@
       "label": "Reply with Recording",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "queued",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "result",
           "required": false,
           "type": "text"
@@ -2723,13 +3151,16 @@
         ],
         "timeout_secs": "30"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "text",
           "required": true,
           "type": "text"
@@ -2738,16 +3169,19 @@
       "label": "AI Switch",
       "outputs": [
         {
+          "family": "unique",
           "name": "arm_1",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "arm_2",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "default",
           "required": false,
           "type": "exec"
@@ -2762,13 +3196,16 @@
         "timeout_secs": "30",
         "type": "text"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "text",
           "required": true,
           "type": "text"
@@ -2777,16 +3214,19 @@
       "label": "AI Extract",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "found",
           "required": false,
           "type": "bool"
@@ -2799,8 +3239,10 @@
       "default_config": {
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
@@ -2809,6 +3251,7 @@
       "label": "Dictionary Table Row Count",
       "outputs": [
         {
+          "family": "scalar",
           "name": "count",
           "required": false,
           "type": "num"
@@ -2822,13 +3265,16 @@
         "index": "0",
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "index",
           "required": true,
           "type": "num"
@@ -2837,11 +3283,13 @@
       "label": "Dictionary Table Get Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "row",
           "required": false,
           "type": "dictionary"
         },
         {
+          "family": "scalar",
           "name": "found",
           "required": false,
           "type": "bool"
@@ -2856,18 +3304,22 @@
         "key": "",
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "column",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "key",
           "required": true,
           "type": "text"
@@ -2876,16 +3328,19 @@
       "label": "Dictionary Table Find Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "row",
           "required": false,
           "type": "dictionary"
         },
         {
+          "family": "scalar",
           "name": "index",
           "required": false,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "found",
           "required": false,
           "type": "bool"
@@ -2900,18 +3355,22 @@
         "row": "0",
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "row",
           "required": true,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "column",
           "required": true,
           "type": "text"
@@ -2920,11 +3379,13 @@
       "label": "Dictionary Table Get Cell",
       "outputs": [
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "found",
           "required": false,
           "type": "bool"
@@ -2938,18 +3399,22 @@
         "table": "",
         "values": {}
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "unique",
           "name": "values",
           "required": false,
           "type": "dictionary"
@@ -2958,6 +3423,7 @@
       "label": "Dictionary Table Add Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -2973,28 +3439,34 @@
         "table": "",
         "value": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "row",
           "required": true,
           "type": "num"
         },
         {
+          "family": "scalar",
           "name": "column",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
@@ -3003,6 +3475,7 @@
       "label": "Dictionary Table Set Cell",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -3018,28 +3491,34 @@
         "table": "",
         "values": {}
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "column",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "key",
           "required": true,
           "type": "text"
         },
         {
+          "family": "unique",
           "name": "values",
           "required": false,
           "type": "dictionary"
@@ -3048,6 +3527,7 @@
       "label": "Dictionary Table Update Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -3062,23 +3542,28 @@
         "key": "",
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "scalar",
           "name": "column",
           "required": true,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "key",
           "required": true,
           "type": "text"
@@ -3087,6 +3572,7 @@
       "label": "Dictionary Table Delete Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -3099,13 +3585,16 @@
       "default_config": {
         "table": ""
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
@@ -3114,6 +3603,7 @@
       "label": "Dictionary Table Clear",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
@@ -3126,10 +3616,12 @@
       "default_config": {
         "columns": []
       },
+      "dynamic": true,
       "inputs": [],
       "label": "Dictionary Schema",
       "outputs": [
         {
+          "family": "unique",
           "name": "schema",
           "required": false,
           "type": "table"
@@ -3142,8 +3634,10 @@
       "default_config": {
         "columns": []
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "schema",
           "required": true,
           "type": "table"
@@ -3152,6 +3646,7 @@
       "label": "Create Dictionary Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "row",
           "required": false,
           "type": "dictionary"
@@ -3162,13 +3657,16 @@
     {
       "category": "Dictionary Tables",
       "default_config": {},
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": true,
           "type": "table"
         },
         {
+          "family": "unique",
           "name": "row",
           "required": true,
           "type": "dictionary"
@@ -3177,6 +3675,7 @@
       "label": "Add Dictionary Row",
       "outputs": [
         {
+          "family": "unique",
           "name": "table",
           "required": false,
           "type": "table"
@@ -3193,13 +3692,16 @@
         "value": "",
         "value_type": "bool"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "bool"
@@ -3208,16 +3710,19 @@
       "label": "Control Tuya Device",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "ok",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "response",
           "required": false,
           "type": "text"
@@ -3233,8 +3738,10 @@
         "tuya_device": "",
         "value_type": "text"
       },
+      "dynamic": true,
       "inputs": [
         {
+          "family": "unique",
           "name": "exec_in",
           "required": false,
           "type": "exec"
@@ -3243,21 +3750,25 @@
       "label": "Read Tuya Status",
       "outputs": [
         {
+          "family": "unique",
           "name": "exec_out",
           "required": false,
           "type": "exec"
         },
         {
+          "family": "scalar",
           "name": "value",
           "required": false,
           "type": "text"
         },
         {
+          "family": "scalar",
           "name": "on",
           "required": false,
           "type": "bool"
         },
         {
+          "family": "scalar",
           "name": "raw",
           "required": false,
           "type": "text"

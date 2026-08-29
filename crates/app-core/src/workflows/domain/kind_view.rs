@@ -78,11 +78,7 @@ pub(super) fn payload_ports(config: &Value) -> Vec<ResolvedPort> {
                     let ty = f
                         .get("type")
                         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())?;
-                    Some(ResolvedPort {
-                        name: PortName::new(name),
-                        ty,
-                        required: false,
-                    })
+                    Some(ResolvedPort::new(PortName::new(name), ty, false))
                 })
                 .collect()
         })
@@ -105,11 +101,7 @@ fn cell_type_to_port(ty: &str) -> PortType {
 /// structural/UI dependency) plus one optional input per configured column, typed by the column's
 /// cell type. Mirrors [`payload_ports`]: the runtime column list is baked into `config.columns`.
 pub(super) fn dict_row_ports(config: &Value) -> Vec<ResolvedPort> {
-    let mut ports = vec![ResolvedPort {
-        name: PortName::new("schema".to_string()),
-        ty: types::TABLE,
-        required: true,
-    }];
+    let mut ports = vec![ResolvedPort::new(PortName::new("schema".to_string()), types::TABLE, true)];
     if let Some(cols) = config.get("columns").and_then(|v| v.as_array()) {
         for c in cols {
             let name = match c.get("name").and_then(|v| v.as_str()) {
@@ -117,11 +109,7 @@ pub(super) fn dict_row_ports(config: &Value) -> Vec<ResolvedPort> {
                 _ => continue,
             };
             let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-            ports.push(ResolvedPort {
-                name: PortName::new(name),
-                ty: cell_type_to_port(ty),
-                required: false,
-            });
+            ports.push(ResolvedPort::new(PortName::new(name), cell_type_to_port(ty), false));
         }
     }
     ports
@@ -136,11 +124,7 @@ pub(super) fn variable_port(config: &Value, required: bool) -> Vec<ResolvedPort>
         .get("type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(types::TEXT);
-    vec![ResolvedPort {
-        name: PortName::new("value".to_string()),
-        ty,
-        required,
-    }]
+    vec![ResolvedPort::new(PortName::new("value".to_string()), ty, required)]
 }
 
 /// The ports of a `MultiSetVariable` / `MultiGetVariable` — one per entry in `config.variables`,
@@ -171,11 +155,7 @@ pub(super) fn multi_variable_ports(config: &Value) -> Vec<ResolvedPort> {
             .get("type")
             .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
             .unwrap_or(types::TEXT);
-        ports.push(ResolvedPort {
-            name: PortName::new(name),
-            ty,
-            required: false,
-        });
+        ports.push(ResolvedPort::new(PortName::new(name), ty, false));
     }
     ports
 }
@@ -189,11 +169,7 @@ pub(super) fn tuya_value_port(config: &Value) -> Vec<ResolvedPort> {
         .get("value_type")
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(types::BOOL);
-    vec![ResolvedPort {
-        name: PortName::new("value".to_string()),
-        ty,
-        required: false,
-    }]
+    vec![ResolvedPort::new(PortName::new("value".to_string()), ty, false)]
 }
 
 /// `TuyaReadStatus`'s outputs: `value` typed by the selected data point (`value_type`, like the
@@ -205,21 +181,9 @@ pub(super) fn tuya_read_output_ports(config: &Value) -> Vec<ResolvedPort> {
         .and_then(|v| serde_json::from_value::<PortType>(v.clone()).ok())
         .unwrap_or(types::TEXT);
     vec![
-        ResolvedPort {
-            name: PortName::new("value".to_string()),
-            ty,
-            required: false,
-        },
-        ResolvedPort {
-            name: PortName::new("on".to_string()),
-            ty: types::BOOL,
-            required: false,
-        },
-        ResolvedPort {
-            name: PortName::new("raw".to_string()),
-            ty: types::TEXT,
-            required: false,
-        },
+        ResolvedPort::new(PortName::new("value".to_string()), ty, false),
+        ResolvedPort::new(PortName::new("on".to_string()), types::BOOL, false),
+        ResolvedPort::new(PortName::new("raw".to_string()), types::TEXT, false),
     ]
 }
 
@@ -234,16 +198,8 @@ pub(super) fn on_event_input_ports(config: &Value) -> Vec<ResolvedPort> {
     let event = config.get("event").and_then(|v| v.as_str()).unwrap_or("");
     if matches!(event, "object_entered" | "object_exited" | "line_crossed") {
         vec![
-            ResolvedPort {
-                name: PortName::new("camera".to_string()),
-                ty: types::CAMERA,
-                required: false,
-            },
-            ResolvedPort {
-                name: PortName::new("region".to_string()),
-                ty: types::REGION,
-                required: false,
-            },
+            ResolvedPort::new(PortName::new("camera".to_string()), types::CAMERA, false),
+            ResolvedPort::new(PortName::new("region".to_string()), types::REGION, false),
         ]
     } else {
         Vec::new()

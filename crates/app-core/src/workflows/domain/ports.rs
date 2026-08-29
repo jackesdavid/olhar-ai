@@ -212,20 +212,12 @@ pub fn resolved_exec_out_ports(kind: NodeKind, config: &Value) -> Vec<ResolvedPo
         NodeKind::StringSwitch | NodeKind::AiSwitch => string_switch_arms(config)
             .into_iter()
             .chain(std::iter::once("default".to_string()))
-            .map(|a| ResolvedPort {
-                name: PortName::new(a),
-                ty: types::EXEC,
-                required: false,
-            })
+            .map(|a| ResolvedPort::new(PortName::new(a), types::EXEC, false))
             .collect(),
         NodeKind::CameraSwitch => (1..=camera_switch_arms(config).len())
             .map(|i| format!("arm_{i}"))
             .chain(std::iter::once("default".to_string()))
-            .map(|a| ResolvedPort {
-                name: PortName::new(a),
-                ty: types::EXEC,
-                required: false,
-            })
+            .map(|a| ResolvedPort::new(PortName::new(a), types::EXEC, false))
             .collect(),
         _ => node
             .kind

@@ -18,3 +18,9 @@ members = [
 # cargo must not mistake it for a stray package of this workspace.
 exclude = ["sentinel-edge", "graph-engine"]
 resolver = "2"
+
+# The engine, from the checkout beside this one, while its new surface is still being built out.
+# Redoma does the same. BOTH must return to a published tag before either ships — see the engine's
+# own repo for what is unreleased.
+[patch."https://github.com/jackesdavid/graph-engine.git"]
+ggraph-core = { path = "graph-engine/ggraph-core" }
