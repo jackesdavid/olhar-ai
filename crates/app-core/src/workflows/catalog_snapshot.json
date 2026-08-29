@@ -1,6 +1,7 @@
 {
   "kinds": [
     {
+      "about": "The most recent alert, with its level, message and room.\n\nFor deciding against what already happened — not repeating an alert, or escalating one.\n\n```\nLast Alert --level--> Text Compare (\"critical\") --result--> Branch\n```",
       "category": "Alerts",
       "default_config": {},
       "dynamic": true,
@@ -66,6 +67,7 @@
       "slug": "get_last_alert"
     },
     {
+      "about": "Finds a recipient by name — a person or a channel that can be notified.\n\nChosen in the inspector. `ok` says whether it was found, so a graph can branch rather than notify\nnobody.\n\n```\nFind Recipient --recipient--> Notify\n```",
       "category": "Recipients",
       "default_config": {
         "recipient": ""
@@ -103,6 +105,7 @@
       "slug": "get_recipient"
     },
     {
+      "about": "Records an alert — the event a person will see in the app.\n\nReturns its `id`, which **Send Alert** needs to deliver it. Creating and sending are separate so a\ngraph can decide, in between, whether this one is worth waking somebody for.\n\n```\nDetect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert --id--> Send Alert\n```",
       "category": "Alerts",
       "default_config": {
         "level": "info",
@@ -162,6 +165,7 @@
       "slug": "create_alert"
     },
     {
+      "about": "Sends an alert that **Create Alert** already recorded, by its `id`.\n\n```\nCreate Alert --id--> Send Alert\n```",
       "category": "Alerts",
       "default_config": {
         "id": "",
@@ -206,6 +210,7 @@
       "slug": "deliver_alert"
     },
     {
+      "about": "Takes a fresh picture from a camera.\n\nAsks the camera for a new frame, so it costs a moment. When any recent frame will do, **Current\nFrame** is cheaper.\n\n```\nFind Camera --camera--> Snapshot --image--> Detect People --count--> Greater Than\n```",
       "category": "Cameras",
       "default_config": {
         "camera": "first",
@@ -268,6 +273,7 @@
       "slug": "camera_snapshot"
     },
     {
+      "about": "The most recent frame already held for a camera, with how old it is.\n\nCheaper than **Snapshot** because nothing is asked of the camera. Check `age_ms` when freshness\nmatters.\n\n```\nFind Camera --camera--> Current Frame --image--> Detect Motion\n```",
       "category": "Cameras",
       "default_config": {
         "camera": "first",
@@ -331,6 +337,7 @@
       "slug": "get_current_frame"
     },
     {
+      "about": "Finds a camera by name, chosen in the inspector.\n\nThe start of most camera graphs: everything else takes a `camera`.\n\n```\nFind Camera --camera--> Snapshot --image--> Detect People\n```",
       "category": "Cameras",
       "default_config": {
         "camera": ""
@@ -349,6 +356,7 @@
       "slug": "get_camera_by_name"
     },
     {
+      "about": "Opens a camera into its id, its address and its name.\n\n```\nFind Camera --camera--> Unpack Camera --name--> Format\n```",
       "category": "Cameras",
       "default_config": {},
       "dynamic": true,
@@ -384,6 +392,7 @@
       "slug": "break_camera"
     },
     {
+      "about": "A named area of a camera's view, drawn in the inspector.\n\nFor asking about part of a picture rather than all of it — a doorway, a driveway.\n\n```\nFind Camera --camera--> Region --region--> Detect People\n```",
       "category": "Vision",
       "default_config": {
         "camera": "first",
@@ -411,6 +420,7 @@
       "slug": "region"
     },
     {
+      "about": "Everything the tracker is currently following on a camera, with the identity it has kept for each.\n\nA tracked object survives between frames, which is what makes \"the same person, still there\"\nanswerable. `objects` is a list to loop over.\n\n```\nFind Camera --camera--> Get Tracked Objects --objects--> For Each --item--> Unpack Tracked Object\n```",
       "category": "Vision",
       "default_config": {
         "camera": "first",
@@ -455,6 +465,7 @@
       "slug": "get_tracked_objects"
     },
     {
+      "about": "Opens a tracked object: its lasting id, its class, where it is, and which zone it is in.\n\n```\nFor Each --item--> Unpack Tracked Object --zone--> Text Compare --result--> Branch\n```",
       "category": "Vision",
       "default_config": {},
       "dynamic": true,
@@ -508,6 +519,7 @@
       "slug": "break_tracked_object"
     },
     {
+      "about": "Describes what is in a picture, in words.\n\n```\nSnapshot --image--> Describe Image --description--> Notify.message\n```",
       "category": "AI",
       "default_config": {
         "label": "",
@@ -559,6 +571,7 @@
       "slug": "describe_image"
     },
     {
+      "about": "Sends a message to a recipient, with a picture if you give it one.\n\n```\nSnapshot --image--> Notify.image\nFormat --text---> Notify.message\nFind Recipient --recipient--> Notify.recipient\n```",
       "category": "Recipients",
       "default_config": {
         "message": "",
@@ -615,6 +628,7 @@
       "slug": "notify_recipient"
     },
     {
+      "about": "Builds a piece of text from a template, filling in `{p1}`, `{p2}` and `{p3}`.\n\nHow values become a sentence somebody reads.\n\n```\nNumber to Text --text--> Format (\"{p1} people at the door\") --text--> Create Alert\n```",
       "category": "Text",
       "default_config": {
         "p1": "",
@@ -667,6 +681,7 @@
       "slug": "format"
     },
     {
+      "about": "Pauses the graph for a number of seconds, then carries on.\n\nIt holds the run, so a long wait is a long run.\n\n```\nStart Recording --> Wait (30) --> Stop Recording\n```",
       "category": "Control",
       "default_config": {
         "seconds": "1"
@@ -692,6 +707,7 @@
       "slug": "wait"
     },
     {
+      "about": "Posts to an HTTP endpoint and returns what came back.\n\n`ok` and `status` say whether it worked, so a graph can branch on failure instead of carrying on.\n\n```\nFormat --text--> HTTP Post --ok--> Branch --false--> Create Alert\n```",
       "category": "Network",
       "default_config": {
         "fields": {},
@@ -763,6 +779,7 @@
       "slug": "http_post"
     },
     {
+      "about": "Sends control down `true` or `false` depending on a condition.\n\nThere is a third arm, `unknown`, for when the condition never arrived — an upstream node that did\nnot run leaves nothing on the wire, and treating that as `false` is how a silent failure looks like\na decision.\n\n```\nGreater Than --result--> Branch --true--> Create Alert\n                               --false--> Print\n```",
       "category": "Control",
       "default_config": {},
       "dynamic": true,
@@ -798,6 +815,7 @@
       "slug": "if"
     },
     {
+      "about": "Runs the nodes on `loop_body` once per item, then continues on `completed`.\n\nTakes a list. The current item and its position come out of `item` and `index`.\n\n```\nGet Tracked Objects --objects--> For Each --item--> Unpack Tracked Object\n                                           --completed--> Create Alert\n```",
       "category": "Control",
       "default_config": {
         "items": ""
@@ -847,6 +865,7 @@
       "slug": "for_each"
     },
     {
+      "about": "Alternates: control goes down `a`, then `b`, then `a` again.\n\nFor anything that should take turns — two cameras, two messages.\n\n```\nWhen Event --> Toggle --a--> Snapshot (front)\n                      --b--> Snapshot (back)\n```",
       "category": "Control",
       "default_config": {},
       "dynamic": true,
@@ -882,6 +901,7 @@
       "slug": "flip_flop"
     },
     {
+      "about": "Compares two numbers with the operator chosen in the inspector, and returns a **bool**.\n\n```\nDetect People --count--> Compare (> 0) --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -915,6 +935,7 @@
       "slug": "compare"
     },
     {
+      "about": "Is `a` less than `b`?\n\n```\nImage Size --width--> Less Than (640) --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -947,6 +968,7 @@
       "slug": "num_lt"
     },
     {
+      "about": "Is `a` less than or equal to `b`?\n\n```\nCurrent Frame --age_ms--> Less Than or Equal (5000) --result--> Branch --true--> Detect People\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -979,6 +1001,7 @@
       "slug": "num_lte"
     },
     {
+      "about": "Is `a` greater than `b`?\n\n```\nDetect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -1011,6 +1034,7 @@
       "slug": "num_gt"
     },
     {
+      "about": "Is `a` greater than or equal to `b`?\n\n```\nDetect People --count--> Greater Than or Equal (2) --result--> Branch --true--> Create Alert\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -1043,6 +1067,7 @@
       "slug": "num_gte"
     },
     {
+      "about": "Are the two numbers equal?\n\n```\nDetect People --count--> Number Equal (1) --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -1075,6 +1100,7 @@
       "slug": "num_eq"
     },
     {
+      "about": "Are the two numbers different?\n\n```\nDictionary Table Row Count --count--> Number Not Equal (0) --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": "0",
@@ -1107,6 +1133,7 @@
       "slug": "num_ne"
     },
     {
+      "about": "Turns a number into text, so it can go in a message.\n\n```\nDetect People --count--> Number to Text --text--> Format\n```",
       "category": "Logic",
       "default_config": {},
       "dynamic": true,
@@ -1130,6 +1157,7 @@
       "slug": "num_to_text"
     },
     {
+      "about": "Turns a yes/no into text, using the words you set in the inspector.\n\n```\nWatch for Motion --moved--> Yes/No to Text --text--> Format\n```",
       "category": "Logic",
       "default_config": {},
       "dynamic": true,
@@ -1153,6 +1181,7 @@
       "slug": "bool_to_text"
     },
     {
+      "about": "Compares two pictures and says whether something moved between them.\n\n`score` is how much. For watching one camera continuously, **Watch for Motion** does the holding of\nthe previous frame for you.\n\n```\nCurrent Frame --image--> Detect Motion.image_a\nSnapshot ------image--> Detect Motion.image_b --moved--> Branch\n```",
       "category": "Vision",
       "default_config": {
         "pixel_threshold": "25",
@@ -1210,6 +1239,7 @@
       "slug": "motion_detection"
     },
     {
+      "about": "Watches one camera and says whether it moved since last time.\n\nKeeps the previous frame itself, so a graph on a schedule needs nothing else.\n\n```\nFind Camera --camera--> Watch for Motion --moved--> Branch --true--> Snapshot\n```",
       "category": "Vision",
       "default_config": {
         "camera": "first",
@@ -1263,6 +1293,7 @@
       "slug": "motion_watch"
     },
     {
+      "about": "Finds people in a picture.\n\n`count` is how many, `persons` is the list to loop over, and `confidence` is the best of them.\n\n```\nSnapshot --image--> Detect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert\n```",
       "category": "Vision",
       "default_config": {
         "timeout_secs": "30"
@@ -1330,6 +1361,7 @@
       "slug": "person_detection"
     },
     {
+      "about": "Finds objects of a named class in a picture — `car`, `dog`, whatever the model knows.\n\n```\nSnapshot --image--> Detect Objects (class: car) --count--> Greater Than (0)\n```",
       "category": "Vision",
       "default_config": {
         "class": "person",
@@ -1404,6 +1436,7 @@
       "slug": "object_detection"
     },
     {
+      "about": "Opens a person detection into its box and its confidence.\n\n```\nDetect People --persons--> For Each --item--> Unpack Person --bbox--> Blur Outside Box\n```",
       "category": "Vision",
       "default_config": {},
       "dynamic": true,
@@ -1445,6 +1478,7 @@
       "slug": "break_person_detection"
     },
     {
+      "about": "Opens a detection into its box and its confidence.\n\n```\nDetect Objects --detections--> For Each --item--> Unpack Detection --bbox--> Draw Detection Box\n```",
       "category": "Vision",
       "default_config": {},
       "dynamic": true,
@@ -1486,6 +1520,7 @@
       "slug": "break_detection"
     },
     {
+      "about": "Opens a face detection into its box, its confidence and its landmarks.\n\n```\nDetect People --> ... --> Unpack Face --bbox--> Extract Face Embedding\n```",
       "category": "Vision",
       "default_config": {},
       "dynamic": true,
@@ -1533,6 +1568,7 @@
       "slug": "break_face_detection"
     },
     {
+      "about": "Finds a face in a picture and says whose it is, in one step.\n\nThe short way round **Extract Face Embedding** and **Recognize Face** — reach for those when you\nwant the embedding itself, or the box.\n\n```\nSnapshot --image--> Recognize Person --person--> Format --text--> Notify\n```",
       "category": "Vision",
       "default_config": {
         "max_distance": "0.4",
@@ -1589,6 +1625,7 @@
       "slug": "recognize_person"
     },
     {
+      "about": "Turns a face in a picture into an embedding — the numbers that let one face be compared to another.\n\nNot a name. **Recognize Face** is what turns it into one.\n\n```\nUnpack Face --bbox--> Extract Face Embedding --embedding--> Recognize Face\n```",
       "category": "Vision",
       "default_config": {
         "timeout_secs": "30"
@@ -1644,6 +1681,7 @@
       "slug": "face_embedding"
     },
     {
+      "about": "Says whose face an embedding is, among the faces that have been stored.\n\n`confidence` is how sure. A face it does not know comes back unnamed rather than as the nearest\nguess.\n\n```\nExtract Face Embedding --embedding--> Recognize Face --person--> Format\n```",
       "category": "Vision",
       "default_config": {
         "max_distance": "0.5",
@@ -1731,6 +1769,7 @@
       "slug": "recognize_face"
     },
     {
+      "about": "Stores a face under a label, so **Recognize Face** can find it later.\n\nA pure sink: whether a face is good enough to keep is a decision for the graph ABOVE it, not for\nthis node.\n\n```\nExtract Face Embedding --embedding--> Store Face\n```",
       "category": "Vision",
       "default_config": {
         "dedup_distance": "0.15",
@@ -1842,6 +1881,7 @@
       "slug": "store_face"
     },
     {
+      "about": "Records that somebody or something was seen in a room, at a moment.\n\nWhat the Map draws its live pulse from.\n\n```\nRecognize Person --person--> Record Presence.label\nFind Camera --camera--------> Record Presence.camera\n```",
       "category": "Presence",
       "default_config": {
         "category": "person",
@@ -1930,6 +1970,7 @@
       "slug": "record_presence"
     },
     {
+      "about": "Sends an event that other graphs can react to with **When Event**.\n\nThe way one graph starts another without either knowing about the other.\n\n```\nRecognize Person --person--> Send Event (person_seen)\n```",
       "category": "Control",
       "default_config": {
         "event": ""
@@ -1955,6 +1996,7 @@
       "slug": "emit_event"
     },
     {
+      "about": "Starts the graph when something happens — a schedule, a system event, or an event another graph\nsent.\n\nChosen in the inspector. The event's fields become this node's output ports, so what a graph reacts\nto and what it can read are the same declaration.\n\n```\nWhen Event (motion) --camera--> Snapshot\n```",
       "category": "Control",
       "default_config": {
         "event": ""
@@ -1980,6 +2022,7 @@
       "slug": "on_event"
     },
     {
+      "about": "Writes a line into the run log, and onto the canvas when `on_screen` is set.\n\nThe node to reach for when a graph did not do what you expected: put it on a wire and see what is\nactually travelling.\n\n```\nDetect People --count--> Print\n```",
       "category": "Debug",
       "default_config": {
         "level": "info",
@@ -2019,6 +2062,7 @@
       "slug": "print"
     },
     {
+      "about": "Shows a picture on the canvas, and keeps it between runs.\n\nFor seeing what a camera or a drawing step actually produced.\n\n```\nDraw Detection Box --image--> Show Image\n```",
       "category": "Debug",
       "default_config": {
         "label": ""
@@ -2050,6 +2094,7 @@
       "slug": "show_image"
     },
     {
+      "about": "Lets control through, then blocks it for a set time.\n\nThe answer to a graph that would otherwise alert every second while something is in view.\n`elapsed_secs` says how long it had been.\n\n```\nDetect People --> Cooldown --> Create Alert\n```",
       "category": "Control",
       "default_config": {
         "window_secs": "60"
@@ -2087,6 +2132,7 @@
       "slug": "cooldown"
     },
     {
+      "about": "Draws a box on a picture, and gives the picture back.\n\nFor showing what was found — in an alert, or on a display node.\n\n```\nUnpack Person --bbox--> Draw Detection Box --image--> Show Image\n```",
       "category": "Vision",
       "default_config": {
         "color": "#00FF00",
@@ -2145,6 +2191,7 @@
       "slug": "draw_bbox"
     },
     {
+      "about": "Writes text on a picture, at a box.\n\n```\nDraw Detection Box --image--> Draw Text --image--> Notify.image\n```",
       "category": "Vision",
       "default_config": {
         "background": true,
@@ -2205,6 +2252,7 @@
       "slug": "draw_text"
     },
     {
+      "about": "Blurs everything OUTSIDE a box, keeping what is inside sharp.\n\nFor sending a picture that shows the thing and not the room around it.\n\n```\nUnpack Person --bbox--> Blur Outside Box --image--> Notify.image\n```",
       "category": "Vision",
       "default_config": {
         "blur": "12"
@@ -2254,6 +2302,7 @@
       "slug": "blur_outside_bbox"
     },
     {
+      "about": "The width and height of a picture.\n\n```\nSnapshot --image--> Image Size --width--> Number to Text\n```",
       "category": "Vision",
       "default_config": {},
       "dynamic": true,
@@ -2301,6 +2350,7 @@
       "slug": "get_image_size"
     },
     {
+      "about": "True when BOTH are true.\n\n```\nWatch for Motion --moved--> And.a\nTime Gate ---------open---> And.b --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": false,
@@ -2333,6 +2383,7 @@
       "slug": "and"
     },
     {
+      "about": "True when EITHER is true.\n\n```\nDetect People --> ... --> Or.a\nDetect Objects --> ... --> Or.b --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "a": false,
@@ -2365,6 +2416,7 @@
       "slug": "or"
     },
     {
+      "about": "Turns true into false and false into true.\n\n```\nRecognize Face --> ... --> Not --result--> Branch --true--> Create Alert\n```",
       "category": "Logic",
       "default_config": {
         "a": false
@@ -2390,6 +2442,7 @@
       "slug": "not"
     },
     {
+      "about": "Compares two pieces of text with the operator chosen in the inspector.\n\n```\nUnpack Tracked Object --class--> Text Compare (\"person\") --result--> Branch\n```",
       "category": "Logic",
       "default_config": {
         "b": "",
@@ -2422,6 +2475,7 @@
       "slug": "text_compare"
     },
     {
+      "about": "Sends control down whichever named arm matches a piece of text.\n\nThe arms are yours, added in the inspector.\n\n```\nUnpack Tracked Object --zone--> Text Switch --driveway--> Create Alert\n                                            --street--> Print\n```",
       "category": "Control",
       "default_config": {
         "arms": [
@@ -2468,6 +2522,7 @@
       "slug": "string_switch"
     },
     {
+      "about": "Sends control down whichever named arm matches the camera.\n\nOne graph, one branch per camera, instead of one graph per camera.\n\n```\nWhen Event --> Camera Switch --front_door--> Create Alert\n                             --garage--> Start Recording\n```",
       "category": "Control",
       "default_config": {
         "arms": []
@@ -2499,6 +2554,7 @@
       "slug": "camera_switch"
     },
     {
+      "about": "Asks a model a yes/no question about a picture and branches on the answer.\n\nControl goes down `yes` or `no`. The answer is a decision, so this is a branch rather than a value.\n\n```\nSnapshot --image--> AI Branch (\"is the gate open?\") --yes--> Create Alert\n```",
       "category": "AI",
       "default_config": {
         "question": "",
@@ -2543,6 +2599,7 @@
       "slug": "ask_ai"
     },
     {
+      "about": "A note on the canvas. Nothing runs; it is there for whoever reads the graph.\n\n```\nComment (\"the second branch is deliberate — see card #144\")\n```",
       "category": "Utility",
       "default_config": {
         "color": "#facc15",
@@ -2564,6 +2621,7 @@
       "slug": "comment"
     },
     {
+      "about": "A heading on the canvas. For arranging a graph so somebody else can read it.\n\n```\nTitle (\"Front door\")\n```",
       "category": "Display",
       "default_config": {
         "color": "#e5e7eb",
@@ -2584,6 +2642,7 @@
       "slug": "title"
     },
     {
+      "about": "A block of text on the canvas, for explaining a graph to whoever opens it next.\n\n```\nParagraph (\"Runs every night; alerts only outside working hours.\")\n```",
       "category": "Display",
       "default_config": {
         "color": "#9ca3af",
@@ -2605,6 +2664,7 @@
       "slug": "paragraph"
     },
     {
+      "about": "A block of Markdown on the canvas — headings, bold, lists.\n\n```\nMarkdown (a heading, then a list of what this graph does)\n```",
       "category": "Display",
       "default_config": {
         "height": 220,
@@ -2625,6 +2685,7 @@
       "slug": "markdown"
     },
     {
+      "about": "Shows a piece of text on the canvas, live.\n\nA readout, not a step: it changes what you see, and control passes through.\n\n```\nRecognize Person --person--> Text\n```",
       "category": "Display",
       "default_config": {
         "bg_color": "#1f2937",
@@ -2658,6 +2719,7 @@
       "slug": "text"
     },
     {
+      "about": "Shows a number on the canvas as a dial.\n\n```\nDetect People --count--> Gauge\n```",
       "category": "Display",
       "default_config": {
         "color": "#22c55e",
@@ -2694,6 +2756,7 @@
       "slug": "gauge"
     },
     {
+      "about": "Starts recording a camera, and returns the clip's id.\n\n`pre_roll_secs` includes the seconds BEFORE this ran — the part that shows what caused the alert,\nwhich is the part a recording started on an event would otherwise miss.\n\n```\nWatch for Motion --moved--> Start Recording --clip_id--> Set Variable\n```",
       "category": "Recording",
       "default_config": {
         "timeout_secs": "30"
@@ -2737,6 +2800,7 @@
       "slug": "start_recording"
     },
     {
+      "about": "Stops a recording that **Start Recording** began, by its clip id.\n\n```\nStart Recording --clip_id--> ... --> Wait (30) --> Stop Recording\n```",
       "category": "Recording",
       "default_config": {
         "timeout_secs": "15"
@@ -2774,6 +2838,7 @@
       "slug": "stop_recording"
     },
     {
+      "about": "Lets control through only during the hours you set.\n\n```\nWatch for Motion --moved--> Time Gate --open--> Create Alert\n```",
       "category": "Control",
       "default_config": {
         "extend_secs": 10,
@@ -2800,6 +2865,7 @@
       "slug": "time_gate"
     },
     {
+      "about": "Holds control for a while, and CANCELS if it is triggered again in the meantime.\n\nThe difference from **Wait**: this one restarts. \"Alert if the door stays open for two minutes\" is\nthis node, and \"alert two minutes after the door opens\" is Wait.\n\n```\nWatch for Motion --moved--> Delay Trigger --fired--> Create Alert\n```",
       "category": "Control",
       "default_config": {
         "extend_secs": 10,
@@ -2832,6 +2898,7 @@
       "slug": "delay_trigger"
     },
     {
+      "about": "Asks a person on their phone, and continues on the arm they choose.\n\nThe run waits. `answered_by` says who replied and `factor` says how, so a graph can record who\nauthorised what.\n\n```\nFormat --text--> Device Gate --approved--> Control Tuya Device\n```",
       "category": "Control",
       "default_config": {
         "message": "",
@@ -2894,6 +2961,7 @@
       "slug": "device_gate"
     },
     {
+      "about": "Reads a value stored earlier by **Set Variable**.\n\nRead where it is wired, so it works from inside a loop body or a branch a wire could not reach.\n\n```\nGet Variable \"seen\" --value--> Format\n```",
       "category": "Variables",
       "default_config": {
         "type": "text",
@@ -2913,6 +2981,7 @@
       "slug": "get_variable"
     },
     {
+      "about": "Stores a value under a name, for another part of the graph to read.\n\nFor a value needed where a wire cannot reach — across a loop's body, or in a branch that runs later.\nA wire is clearer whenever one will do.\n\n```\nDetect People --count--> ... --> Set Variable \"seen\"\n```",
       "category": "Variables",
       "default_config": {
         "type": "text",
@@ -2945,6 +3014,7 @@
       "slug": "set_variable"
     },
     {
+      "about": "Stores SEVERAL variables at once. Each one you add becomes a typed port named after it.\n\n```\nUnpack Tracked Object --class--> Set Variables.class\n                       --zone---> Set Variables.zone\n```",
       "category": "Variables",
       "default_config": {
         "variables": []
@@ -2970,6 +3040,7 @@
       "slug": "multi_set_variable"
     },
     {
+      "about": "Reads several variables at once. Each one you add becomes a typed port named after it.\n\n```\nGet Variables --class--> Format.p1\n              --zone---> Format.p2\n```",
       "category": "Variables",
       "default_config": {
         "variables": []
@@ -2981,6 +3052,7 @@
       "slug": "multi_get_variable"
     },
     {
+      "about": "Replies in the Telegram chat the message came from, with a picture if you give it one.\n\n```\nWhen Event (telegram_message) --chat_id--> Reply to Sender.chat_id\nSnapshot --image--> Reply to Sender.image\n```",
       "category": "Telegram",
       "default_config": {
         "message": "",
@@ -3037,6 +3109,7 @@
       "slug": "reply_to_sender"
     },
     {
+      "about": "Asks a model a question, optionally about a picture, and returns its answer as text.\n\n```\nSnapshot --image--> AI Answer.image\nFormat --text-----> AI Answer.prompt --response--> Notify\n```",
       "category": "AI",
       "default_config": {
         "prompt": "",
@@ -3087,6 +3160,7 @@
       "slug": "ai_answer"
     },
     {
+      "about": "Sends a recorded clip back to a Telegram chat.\n\n```\nStart Recording --clip_id--> ... --> Reply with Recording\n```",
       "category": "Telegram",
       "default_config": {
         "caption": "",
@@ -3143,6 +3217,7 @@
       "slug": "reply_with_recording"
     },
     {
+      "about": "Sends control down whichever named arm a model picks for a piece of text.\n\nThe arms are yours, added in the inspector — one per outcome you want to handle.\n\n```\nDescribe Image --description--> AI Switch --delivery--> Notify\n                                          --intruder--> Create Alert\n```",
       "category": "Control",
       "default_config": {
         "arms": [
@@ -3190,6 +3265,7 @@
       "slug": "ai_switch"
     },
     {
+      "about": "Pulls one named value out of a piece of text, using a model.\n\n`found` says whether it was there, so a graph can branch instead of carrying on with nothing.\n\n```\nDescribe Image --description--> AI Extract (plate) --found--> Branch --true--> Create Alert\n```",
       "category": "AI",
       "default_config": {
         "field": "",
@@ -3235,6 +3311,7 @@
       "slug": "ai_extract"
     },
     {
+      "about": "How many rows a dictionary table has.\n\n```\nDictionary Table Row Count --count--> Greater Than (0) --result--> Branch\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "table": ""
@@ -3260,6 +3337,7 @@
       "slug": "dict_row_count"
     },
     {
+      "about": "Takes the row at a position. `found` says whether there was one.\n\n```\nDictionary Table Get Row (index 0) --row--> Dictionary Table Get Cell\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "index": "0",
@@ -3298,6 +3376,7 @@
       "slug": "dict_get_row"
     },
     {
+      "about": "Finds the first row whose named column matches a key.\n\n`index` is where it was, and `found` says whether anything matched — so a graph can say \"no\" rather\nthan carry on with an empty row.\n\n```\nDictionary Table Find Row --found--> Branch --false--> Add Dictionary Row\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "column": "",
@@ -3349,6 +3428,7 @@
       "slug": "dict_find_row"
     },
     {
+      "about": "Takes one cell, by row number and column name.\n\n```\nDictionary Table Get Cell --value--> Format\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "column": "",
@@ -3394,6 +3474,7 @@
       "slug": "dict_get_cell"
     },
     {
+      "about": "Adds a row to a dictionary table from a set of values.\n\n```\nDictionary Table Add Row (values from a dictionary)\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "table": "",
@@ -3432,6 +3513,7 @@
       "slug": "dict_add_row"
     },
     {
+      "about": "Changes one cell, by row number and column name.\n\n```\nDictionary Table Find Row --index--> Dictionary Table Set Cell\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "column": "",
@@ -3484,6 +3566,7 @@
       "slug": "dict_set_cell"
     },
     {
+      "about": "Updates the first row whose named column matches a key.\n\nFind-and-change in one node, for a table kept as a record of something.\n\n```\nDictionary Table Update Row (column: id, key: …, values: …)\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "column": "",
@@ -3536,6 +3619,7 @@
       "slug": "dict_update_row"
     },
     {
+      "about": "Removes the first row whose named column matches a key.\n\n```\nDictionary Table Delete Row (column: id, key: …)\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "column": "",
@@ -3581,6 +3665,7 @@
       "slug": "dict_delete_row"
     },
     {
+      "about": "Empties a dictionary table, keeping its columns.\n\nFor a table rebuilt each run rather than added to.\n\n```\nWhen Event --> Dictionary Table Clear --> For Each --item--> Add Dictionary Row\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "table": ""
@@ -3612,6 +3697,7 @@
       "slug": "dict_clear"
     },
     {
+      "about": "Declares the columns of a dictionary table: a name and a type for each.\n\nWire it into the nodes that build or read rows, and the columns become their ports.\n\n```\nDictionary Schema --schema--> Create Dictionary Row --row--> Add Dictionary Row\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "columns": []
@@ -3630,6 +3716,7 @@
       "slug": "dict_schema"
     },
     {
+      "about": "Builds a row from a schema. Each declared column becomes a port to wire.\n\n```\nDictionary Schema --schema--> Create Dictionary Row --row--> Add Dictionary Row\n```",
       "category": "Dictionary Tables",
       "default_config": {
         "columns": []
@@ -3655,6 +3742,7 @@
       "slug": "dict_make_row"
     },
     {
+      "about": "Adds a row to a dictionary table and gives the table back.\n\n```\nCreate Dictionary Row --row--> Add Dictionary Row --table--> Dictionary Table Row Count\n```",
       "category": "Dictionary Tables",
       "default_config": {},
       "dynamic": true,
@@ -3684,6 +3772,7 @@
       "slug": "dict_append_row"
     },
     {
+      "about": "Turns a smart-home device on or off, or sets its value.\n\nThe device is chosen in the inspector.\n\n```\nDetect People --> ... --> Branch --true--> Control Tuya Device (on)\n```",
       "category": "Smart Home",
       "default_config": {
         "timeout_secs": "15",
@@ -3731,6 +3820,7 @@
       "slug": "tuya_control"
     },
     {
+      "about": "Reads a smart-home device's current state.\n\n`on` is the yes/no for a switch; `value` and `raw` are for everything else.\n\n```\nRead Tuya Status --on--> Not --result--> Branch --true--> Control Tuya Device\n```",
       "category": "Smart Home",
       "default_config": {
         "timeout_secs": "15",

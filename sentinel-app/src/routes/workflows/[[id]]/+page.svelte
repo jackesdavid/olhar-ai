@@ -27,6 +27,7 @@
   import Pause from "@lucide/svelte/icons/pause";
   import Square from "@lucide/svelte/icons/square";
   import Trash2 from "@lucide/svelte/icons/trash-2";
+  import HelpCircle from "@lucide/svelte/icons/circle-help";
   import Power from "@lucide/svelte/icons/power";
   import Busy from "$lib/components/busy.svelte";
   import ZoomIn from "@lucide/svelte/icons/zoom-in";
@@ -147,6 +148,9 @@
     inputs: CatPort[];
     outputs: CatPort[];
     default_config: Record<string, unknown>;
+    /** What the kind is FOR, in Markdown, with an example chain. The same text a builder reads
+     *  before choosing a node — because it is the same question. */
+    about?: string;
   };
   type Node = { id: number; kind: string; x: number; y: number; config: Record<string, unknown> };
   type Edge = { from: number; from_port: string; to: number; to_port: string };
@@ -266,6 +270,62 @@
     level?: string;
     ms?: number; // per-node execution time (debug logs only)
   };
+
+  /** Which kind's description is open, or null. */
+  let aboutKind = $state<string | null>(null);
+
+  /** Markdown, for the subset the node descriptions use.
+   *
+   *  Hand-rolled rather than a dependency: the input is our own Rust source, not anything a user
+   *  typed, and the whole grammar here is four cases. A library would be a megabyte and a supply
+   *  chain for headings, bold, code and a fence. */
+  type MdBlock = { kind: "h" | "p" | "li" | "code"; text: string };
+  function mdBlocks(md: string): MdBlock[] {
+    const out: MdBlock[] = [];
+    let fence: string[] | null = null;
+    let para: string[] = [];
+    const flush = () => {
+      if (para.length) out.push({ kind: "p", text: para.join(" ") });
+      para = [];
+    };
+    for (const raw of md.split("\n")) {
+      const line = raw.trimEnd();
+      if (line.trimStart().startsWith("```")) {
+        if (fence) {
+          out.push({ kind: "code", text: fence.join("\n") });
+          fence = null;
+        } else {
+          flush();
+          fence = [];
+        }
+        continue;
+      }
+      if (fence) { fence.push(raw); continue; }
+      if (line.trim() === "") { flush(); continue; }
+      if (line.startsWith("#")) { flush(); out.push({ kind: "h", text: line.replace(/^#+\s*/, "") }); continue; }
+      if (/^[-*]\s/.test(line.trim())) { flush(); out.push({ kind: "li", text: line.trim().slice(2) }); continue; }
+      para.push(line.trim());
+    }
+    // An unterminated fence is still worth showing — losing the example is worse than showing it raw.
+    if (fence) out.push({ kind: "code", text: fence.join("\n") });
+    flush();
+    return out;
+  }
+
+  /** `**bold**` and `` `code` ``, as runs a template can draw without {@html}. */
+  type MdRun = { text: string; bold: boolean; code: boolean };
+  function mdRuns(s: string): MdRun[] {
+    const out: MdRun[] = [];
+    const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+    let at = 0;
+    for (let m = re.exec(s); m; m = re.exec(s)) {
+      if (m.index > at) out.push({ text: s.slice(at, m.index), bold: false, code: false });
+      out.push({ text: m[1] ?? m[2], bold: m[1] != null, code: m[2] != null });
+      at = m.index + m[0].length;
+    }
+    if (at < s.length) out.push({ text: s.slice(at), bold: false, code: false });
+    return out;
+  }
 
   // ---- layout constants ----------------------------------------------------
   const NODE_W = 176;
@@ -5090,9 +5150,18 @@
                   <span class="truncate">{nk?.label ?? selectedNode.kind}</span>
                   <span class="shrink-0 text-muted-foreground">#{selectedNode.id}</span>
                 </span>
-                <Button variant="ghost" size="icon" class="size-7 shrink-0" title={t.deleteNode} disabled={editLocked} onclick={() => removeNode(selectedNode)}>
-                  <Trash2 class="size-3.5" />
-                </Button>
+                <span class="flex shrink-0 items-center">
+                  {#if nk?.about}
+                    <!-- What this node is for. The same text the catalogue hands a builder, shown
+                         to the person who has to make the same decision. -->
+                    <Button variant="ghost" size="icon" class="size-7 shrink-0" title={t.whatIsThisNode} onclick={() => (aboutKind = selectedNode.kind)}>
+                      <HelpCircle class="size-3.5" />
+                    </Button>
+                  {/if}
+                  <Button variant="ghost" size="icon" class="size-7 shrink-0" title={t.deleteNode} disabled={editLocked} onclick={() => removeNode(selectedNode)}>
+                    <Trash2 class="size-3.5" />
+                  </Button>
+                </span>
               </div>
               {#if isMultiVarNode(selectedNode)}
                 <!-- Set Variables / Get Variables (#179): pick which of the graph's variables this
@@ -6034,6 +6103,36 @@
 </div>
 
 <!-- Run inputs prompt (#102): fill in the graph's input variables before running -->
+<!-- A node's description, full screen. Markdown as the engine wrote it, example and all: what a
+     reader wants to know is what feeds this node and what it feeds. -->
+<Dialog.Root open={aboutKind !== null} onOpenChange={(o) => { if (!o) aboutKind = null; }}>
+  <Dialog.Content class="flex max-h-[86vh] max-w-[min(94vw,44rem)] flex-col gap-0 p-0 sm:max-w-[min(94vw,44rem)]">
+    {#if aboutKind && catalog[aboutKind]}
+      {@const ak = catalog[aboutKind]}
+      <Dialog.Header class="border-b border-border px-4 py-3">
+        <Dialog.Title class="text-sm">{ak.label}</Dialog.Title>
+        <Dialog.Description class="text-xs">{ak.category} · {ak.slug}</Dialog.Description>
+      </Dialog.Header>
+      <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 py-3 text-sm leading-relaxed">
+        {#each mdBlocks(ak.about ?? "") as b, i (i)}
+          {#if b.kind === "code"}
+            <pre class="overflow-x-auto rounded-lg border border-border bg-hover px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre">{b.text}</pre>
+          {:else if b.kind === "h"}
+            <p class="pt-1 text-sm font-medium">{b.text}</p>
+          {:else if b.kind === "li"}
+            <p class="flex gap-2 pl-1 text-muted-foreground">
+              <span class="select-none">·</span>
+              <span>{#each mdRuns(b.text) as r, j (j)}{#if r.code}<code class="rounded bg-hover px-1 py-0.5 font-mono text-xs">{r.text}</code>{:else if r.bold}<strong class="font-medium text-foreground">{r.text}</strong>{:else}{r.text}{/if}{/each}</span>
+            </p>
+          {:else}
+            <p class="text-muted-foreground">{#each mdRuns(b.text) as r, j (j)}{#if r.code}<code class="rounded bg-hover px-1 py-0.5 font-mono text-xs">{r.text}</code>{:else if r.bold}<strong class="font-medium text-foreground">{r.text}</strong>{:else}{r.text}{/if}{/each}</p>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
+
 <Dialog.Root bind:open={runPromptOpen}>
   <Dialog.Content class="sm:max-w-md">
     <Dialog.Header>

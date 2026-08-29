@@ -1151,6 +1151,598 @@ impl NodeKind {
         }
     }
 
+    /// What this node is for, in Markdown, with an example chain.
+    ///
+    /// `label` and `category` name a thing; they do not say when to reach for it. Two readers, one
+    /// text: the palette shows it to a person, and the catalogue hands it to whatever is choosing
+    /// nodes — they are asking the same question. The example is not decoration: what a reader
+    /// wants to know is what feeds this and what it feeds, and a chain answers that in one line.
+    pub fn about(self) -> &'static str {
+        match self {
+            NodeKind::AiAnswer => r#"Asks a model a question, optionally about a picture, and returns its answer as text.
+
+```
+Snapshot --image--> AI Answer.image
+Format --text-----> AI Answer.prompt --response--> Notify
+```"#,
+            NodeKind::AiExtract => r#"Pulls one named value out of a piece of text, using a model.
+
+`found` says whether it was there, so a graph can branch instead of carrying on with nothing.
+
+```
+Describe Image --description--> AI Extract (plate) --found--> Branch --true--> Create Alert
+```"#,
+            NodeKind::AiSwitch => r#"Sends control down whichever named arm a model picks for a piece of text.
+
+The arms are yours, added in the inspector — one per outcome you want to handle.
+
+```
+Describe Image --description--> AI Switch --delivery--> Notify
+                                          --intruder--> Create Alert
+```"#,
+            NodeKind::And => r#"True when BOTH are true.
+
+```
+Watch for Motion --moved--> And.a
+Time Gate ---------open---> And.b --result--> Branch
+```"#,
+            NodeKind::AskAi => r#"Asks a model a yes/no question about a picture and branches on the answer.
+
+Control goes down `yes` or `no`. The answer is a decision, so this is a branch rather than a value.
+
+```
+Snapshot --image--> AI Branch ("is the gate open?") --yes--> Create Alert
+```"#,
+            NodeKind::BlurOutsideBbox => r#"Blurs everything OUTSIDE a box, keeping what is inside sharp.
+
+For sending a picture that shows the thing and not the room around it.
+
+```
+Unpack Person --bbox--> Blur Outside Box --image--> Notify.image
+```"#,
+            NodeKind::BoolToText => r#"Turns a yes/no into text, using the words you set in the inspector.
+
+```
+Watch for Motion --moved--> Yes/No to Text --text--> Format
+```"#,
+            NodeKind::BreakCamera => r#"Opens a camera into its id, its address and its name.
+
+```
+Find Camera --camera--> Unpack Camera --name--> Format
+```"#,
+            NodeKind::BreakDetection => r#"Opens a detection into its box and its confidence.
+
+```
+Detect Objects --detections--> For Each --item--> Unpack Detection --bbox--> Draw Detection Box
+```"#,
+            NodeKind::BreakFaceDetection => r#"Opens a face detection into its box, its confidence and its landmarks.
+
+```
+Detect People --> ... --> Unpack Face --bbox--> Extract Face Embedding
+```"#,
+            NodeKind::BreakPersonDetection => r#"Opens a person detection into its box and its confidence.
+
+```
+Detect People --persons--> For Each --item--> Unpack Person --bbox--> Blur Outside Box
+```"#,
+            NodeKind::BreakTrackedObject => r#"Opens a tracked object: its lasting id, its class, where it is, and which zone it is in.
+
+```
+For Each --item--> Unpack Tracked Object --zone--> Text Compare --result--> Branch
+```"#,
+            NodeKind::CameraSnapshot => r#"Takes a fresh picture from a camera.
+
+Asks the camera for a new frame, so it costs a moment. When any recent frame will do, **Current
+Frame** is cheaper.
+
+```
+Find Camera --camera--> Snapshot --image--> Detect People --count--> Greater Than
+```"#,
+            NodeKind::CameraSwitch => r#"Sends control down whichever named arm matches the camera.
+
+One graph, one branch per camera, instead of one graph per camera.
+
+```
+When Event --> Camera Switch --front_door--> Create Alert
+                             --garage--> Start Recording
+```"#,
+            NodeKind::Comment => r#"A note on the canvas. Nothing runs; it is there for whoever reads the graph.
+
+```
+Comment ("the second branch is deliberate — see card #144")
+```"#,
+            NodeKind::Compare => r#"Compares two numbers with the operator chosen in the inspector, and returns a **bool**.
+
+```
+Detect People --count--> Compare (> 0) --result--> Branch
+```"#,
+            NodeKind::Cooldown => r#"Lets control through, then blocks it for a set time.
+
+The answer to a graph that would otherwise alert every second while something is in view.
+`elapsed_secs` says how long it had been.
+
+```
+Detect People --> Cooldown --> Create Alert
+```"#,
+            NodeKind::CreateAlert => r#"Records an alert — the event a person will see in the app.
+
+Returns its `id`, which **Send Alert** needs to deliver it. Creating and sending are separate so a
+graph can decide, in between, whether this one is worth waking somebody for.
+
+```
+Detect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert --id--> Send Alert
+```"#,
+            NodeKind::DelayTrigger => r#"Holds control for a while, and CANCELS if it is triggered again in the meantime.
+
+The difference from **Wait**: this one restarts. "Alert if the door stays open for two minutes" is
+this node, and "alert two minutes after the door opens" is Wait.
+
+```
+Watch for Motion --moved--> Delay Trigger --fired--> Create Alert
+```"#,
+            NodeKind::DeliverAlert => r#"Sends an alert that **Create Alert** already recorded, by its `id`.
+
+```
+Create Alert --id--> Send Alert
+```"#,
+            NodeKind::DescribeImage => r#"Describes what is in a picture, in words.
+
+```
+Snapshot --image--> Describe Image --description--> Notify.message
+```"#,
+            NodeKind::DeviceGate => r#"Asks a person on their phone, and continues on the arm they choose.
+
+The run waits. `answered_by` says who replied and `factor` says how, so a graph can record who
+authorised what.
+
+```
+Format --text--> Device Gate --approved--> Control Tuya Device
+```"#,
+            NodeKind::DictAddRow => r#"Adds a row to a dictionary table from a set of values.
+
+```
+Dictionary Table Add Row (values from a dictionary)
+```"#,
+            NodeKind::DictAppendRow => r#"Adds a row to a dictionary table and gives the table back.
+
+```
+Create Dictionary Row --row--> Add Dictionary Row --table--> Dictionary Table Row Count
+```"#,
+            NodeKind::DictClear => r#"Empties a dictionary table, keeping its columns.
+
+For a table rebuilt each run rather than added to.
+
+```
+When Event --> Dictionary Table Clear --> For Each --item--> Add Dictionary Row
+```"#,
+            NodeKind::DictDeleteRow => r#"Removes the first row whose named column matches a key.
+
+```
+Dictionary Table Delete Row (column: id, key: …)
+```"#,
+            NodeKind::DictFindRow => r#"Finds the first row whose named column matches a key.
+
+`index` is where it was, and `found` says whether anything matched — so a graph can say "no" rather
+than carry on with an empty row.
+
+```
+Dictionary Table Find Row --found--> Branch --false--> Add Dictionary Row
+```"#,
+            NodeKind::DictGetCell => r#"Takes one cell, by row number and column name.
+
+```
+Dictionary Table Get Cell --value--> Format
+```"#,
+            NodeKind::DictGetRow => r#"Takes the row at a position. `found` says whether there was one.
+
+```
+Dictionary Table Get Row (index 0) --row--> Dictionary Table Get Cell
+```"#,
+            NodeKind::DictMakeRow => r#"Builds a row from a schema. Each declared column becomes a port to wire.
+
+```
+Dictionary Schema --schema--> Create Dictionary Row --row--> Add Dictionary Row
+```"#,
+            NodeKind::DictRowCount => r#"How many rows a dictionary table has.
+
+```
+Dictionary Table Row Count --count--> Greater Than (0) --result--> Branch
+```"#,
+            NodeKind::DictSchema => r#"Declares the columns of a dictionary table: a name and a type for each.
+
+Wire it into the nodes that build or read rows, and the columns become their ports.
+
+```
+Dictionary Schema --schema--> Create Dictionary Row --row--> Add Dictionary Row
+```"#,
+            NodeKind::DictSetCell => r#"Changes one cell, by row number and column name.
+
+```
+Dictionary Table Find Row --index--> Dictionary Table Set Cell
+```"#,
+            NodeKind::DictUpdateRow => r#"Updates the first row whose named column matches a key.
+
+Find-and-change in one node, for a table kept as a record of something.
+
+```
+Dictionary Table Update Row (column: id, key: …, values: …)
+```"#,
+            NodeKind::DrawBbox => r#"Draws a box on a picture, and gives the picture back.
+
+For showing what was found — in an alert, or on a display node.
+
+```
+Unpack Person --bbox--> Draw Detection Box --image--> Show Image
+```"#,
+            NodeKind::DrawText => r#"Writes text on a picture, at a box.
+
+```
+Draw Detection Box --image--> Draw Text --image--> Notify.image
+```"#,
+            NodeKind::EmitEvent => r#"Sends an event that other graphs can react to with **When Event**.
+
+The way one graph starts another without either knowing about the other.
+
+```
+Recognize Person --person--> Send Event (person_seen)
+```"#,
+            NodeKind::FaceEmbedding => r#"Turns a face in a picture into an embedding — the numbers that let one face be compared to another.
+
+Not a name. **Recognize Face** is what turns it into one.
+
+```
+Unpack Face --bbox--> Extract Face Embedding --embedding--> Recognize Face
+```"#,
+            NodeKind::FlipFlop => r#"Alternates: control goes down `a`, then `b`, then `a` again.
+
+For anything that should take turns — two cameras, two messages.
+
+```
+When Event --> Toggle --a--> Snapshot (front)
+                      --b--> Snapshot (back)
+```"#,
+            NodeKind::ForEach => r#"Runs the nodes on `loop_body` once per item, then continues on `completed`.
+
+Takes a list. The current item and its position come out of `item` and `index`.
+
+```
+Get Tracked Objects --objects--> For Each --item--> Unpack Tracked Object
+                                           --completed--> Create Alert
+```"#,
+            NodeKind::Format => r#"Builds a piece of text from a template, filling in `{p1}`, `{p2}` and `{p3}`.
+
+How values become a sentence somebody reads.
+
+```
+Number to Text --text--> Format ("{p1} people at the door") --text--> Create Alert
+```"#,
+            NodeKind::Gauge => r#"Shows a number on the canvas as a dial.
+
+```
+Detect People --count--> Gauge
+```"#,
+            NodeKind::GetCameraByName => r#"Finds a camera by name, chosen in the inspector.
+
+The start of most camera graphs: everything else takes a `camera`.
+
+```
+Find Camera --camera--> Snapshot --image--> Detect People
+```"#,
+            NodeKind::GetCurrentFrame => r#"The most recent frame already held for a camera, with how old it is.
+
+Cheaper than **Snapshot** because nothing is asked of the camera. Check `age_ms` when freshness
+matters.
+
+```
+Find Camera --camera--> Current Frame --image--> Detect Motion
+```"#,
+            NodeKind::GetImageSize => r#"The width and height of a picture.
+
+```
+Snapshot --image--> Image Size --width--> Number to Text
+```"#,
+            NodeKind::GetLastAlert => r#"The most recent alert, with its level, message and room.
+
+For deciding against what already happened — not repeating an alert, or escalating one.
+
+```
+Last Alert --level--> Text Compare ("critical") --result--> Branch
+```"#,
+            NodeKind::GetRecipient => r#"Finds a recipient by name — a person or a channel that can be notified.
+
+Chosen in the inspector. `ok` says whether it was found, so a graph can branch rather than notify
+nobody.
+
+```
+Find Recipient --recipient--> Notify
+```"#,
+            NodeKind::GetTrackedObjects => r#"Everything the tracker is currently following on a camera, with the identity it has kept for each.
+
+A tracked object survives between frames, which is what makes "the same person, still there"
+answerable. `objects` is a list to loop over.
+
+```
+Find Camera --camera--> Get Tracked Objects --objects--> For Each --item--> Unpack Tracked Object
+```"#,
+            NodeKind::GetVariable => r#"Reads a value stored earlier by **Set Variable**.
+
+Read where it is wired, so it works from inside a loop body or a branch a wire could not reach.
+
+```
+Get Variable "seen" --value--> Format
+```"#,
+            NodeKind::HttpPost => r#"Posts to an HTTP endpoint and returns what came back.
+
+`ok` and `status` say whether it worked, so a graph can branch on failure instead of carrying on.
+
+```
+Format --text--> HTTP Post --ok--> Branch --false--> Create Alert
+```"#,
+            NodeKind::If => r#"Sends control down `true` or `false` depending on a condition.
+
+There is a third arm, `unknown`, for when the condition never arrived — an upstream node that did
+not run leaves nothing on the wire, and treating that as `false` is how a silent failure looks like
+a decision.
+
+```
+Greater Than --result--> Branch --true--> Create Alert
+                               --false--> Print
+```"#,
+            NodeKind::Markdown => r#"A block of Markdown on the canvas — headings, bold, lists.
+
+```
+Markdown (a heading, then a list of what this graph does)
+```"#,
+            NodeKind::MotionDetection => r#"Compares two pictures and says whether something moved between them.
+
+`score` is how much. For watching one camera continuously, **Watch for Motion** does the holding of
+the previous frame for you.
+
+```
+Current Frame --image--> Detect Motion.image_a
+Snapshot ------image--> Detect Motion.image_b --moved--> Branch
+```"#,
+            NodeKind::MotionWatch => r#"Watches one camera and says whether it moved since last time.
+
+Keeps the previous frame itself, so a graph on a schedule needs nothing else.
+
+```
+Find Camera --camera--> Watch for Motion --moved--> Branch --true--> Snapshot
+```"#,
+            NodeKind::MultiGetVariable => r#"Reads several variables at once. Each one you add becomes a typed port named after it.
+
+```
+Get Variables --class--> Format.p1
+              --zone---> Format.p2
+```"#,
+            NodeKind::MultiSetVariable => r#"Stores SEVERAL variables at once. Each one you add becomes a typed port named after it.
+
+```
+Unpack Tracked Object --class--> Set Variables.class
+                       --zone---> Set Variables.zone
+```"#,
+            NodeKind::Not => r#"Turns true into false and false into true.
+
+```
+Recognize Face --> ... --> Not --result--> Branch --true--> Create Alert
+```"#,
+            NodeKind::NotifyRecipient => r#"Sends a message to a recipient, with a picture if you give it one.
+
+```
+Snapshot --image--> Notify.image
+Format --text---> Notify.message
+Find Recipient --recipient--> Notify.recipient
+```"#,
+            NodeKind::NumEq => r#"Are the two numbers equal?
+
+```
+Detect People --count--> Number Equal (1) --result--> Branch
+```"#,
+            NodeKind::NumGt => r#"Is `a` greater than `b`?
+
+```
+Detect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert
+```"#,
+            NodeKind::NumLt => r#"Is `a` less than `b`?
+
+```
+Image Size --width--> Less Than (640) --result--> Branch
+```"#,
+            NodeKind::NumLte => r#"Is `a` less than or equal to `b`?
+
+```
+Current Frame --age_ms--> Less Than or Equal (5000) --result--> Branch --true--> Detect People
+```"#,
+            NodeKind::NumNe => r#"Are the two numbers different?
+
+```
+Dictionary Table Row Count --count--> Number Not Equal (0) --result--> Branch
+```"#,
+            NodeKind::NumToText => r#"Turns a number into text, so it can go in a message.
+
+```
+Detect People --count--> Number to Text --text--> Format
+```"#,
+            NodeKind::ObjectDetection => r#"Finds objects of a named class in a picture — `car`, `dog`, whatever the model knows.
+
+```
+Snapshot --image--> Detect Objects (class: car) --count--> Greater Than (0)
+```"#,
+            NodeKind::OnEvent => r#"Starts the graph when something happens — a schedule, a system event, or an event another graph
+sent.
+
+Chosen in the inspector. The event's fields become this node's output ports, so what a graph reacts
+to and what it can read are the same declaration.
+
+```
+When Event (motion) --camera--> Snapshot
+```"#,
+            NodeKind::Or => r#"True when EITHER is true.
+
+```
+Detect People --> ... --> Or.a
+Detect Objects --> ... --> Or.b --result--> Branch
+```"#,
+            NodeKind::Paragraph => r#"A block of text on the canvas, for explaining a graph to whoever opens it next.
+
+```
+Paragraph ("Runs every night; alerts only outside working hours.")
+```"#,
+            NodeKind::PersonDetection => r#"Finds people in a picture.
+
+`count` is how many, `persons` is the list to loop over, and `confidence` is the best of them.
+
+```
+Snapshot --image--> Detect People --count--> Greater Than (0) --result--> Branch --true--> Create Alert
+```"#,
+            NodeKind::Print => r#"Writes a line into the run log, and onto the canvas when `on_screen` is set.
+
+The node to reach for when a graph did not do what you expected: put it on a wire and see what is
+actually travelling.
+
+```
+Detect People --count--> Print
+```"#,
+            NodeKind::RecognizeFace => r#"Says whose face an embedding is, among the faces that have been stored.
+
+`confidence` is how sure. A face it does not know comes back unnamed rather than as the nearest
+guess.
+
+```
+Extract Face Embedding --embedding--> Recognize Face --person--> Format
+```"#,
+            NodeKind::RecognizePerson => r#"Finds a face in a picture and says whose it is, in one step.
+
+The short way round **Extract Face Embedding** and **Recognize Face** — reach for those when you
+want the embedding itself, or the box.
+
+```
+Snapshot --image--> Recognize Person --person--> Format --text--> Notify
+```"#,
+            NodeKind::RecordPresence => r#"Records that somebody or something was seen in a room, at a moment.
+
+What the Map draws its live pulse from.
+
+```
+Recognize Person --person--> Record Presence.label
+Find Camera --camera--------> Record Presence.camera
+```"#,
+            NodeKind::Region => r#"A named area of a camera's view, drawn in the inspector.
+
+For asking about part of a picture rather than all of it — a doorway, a driveway.
+
+```
+Find Camera --camera--> Region --region--> Detect People
+```"#,
+            NodeKind::ReplyToSender => r#"Replies in the Telegram chat the message came from, with a picture if you give it one.
+
+```
+When Event (telegram_message) --chat_id--> Reply to Sender.chat_id
+Snapshot --image--> Reply to Sender.image
+```"#,
+            NodeKind::ReplyWithRecording => r#"Sends a recorded clip back to a Telegram chat.
+
+```
+Start Recording --clip_id--> ... --> Reply with Recording
+```"#,
+            NodeKind::SetVariable => r#"Stores a value under a name, for another part of the graph to read.
+
+For a value needed where a wire cannot reach — across a loop's body, or in a branch that runs later.
+A wire is clearer whenever one will do.
+
+```
+Detect People --count--> ... --> Set Variable "seen"
+```"#,
+            NodeKind::ShowImage => r#"Shows a picture on the canvas, and keeps it between runs.
+
+For seeing what a camera or a drawing step actually produced.
+
+```
+Draw Detection Box --image--> Show Image
+```"#,
+            NodeKind::StartRecording => r#"Starts recording a camera, and returns the clip's id.
+
+`pre_roll_secs` includes the seconds BEFORE this ran — the part that shows what caused the alert,
+which is the part a recording started on an event would otherwise miss.
+
+```
+Watch for Motion --moved--> Start Recording --clip_id--> Set Variable
+```"#,
+            NodeKind::StopRecording => r#"Stops a recording that **Start Recording** began, by its clip id.
+
+```
+Start Recording --clip_id--> ... --> Wait (30) --> Stop Recording
+```"#,
+            NodeKind::StoreFace => r#"Stores a face under a label, so **Recognize Face** can find it later.
+
+A pure sink: whether a face is good enough to keep is a decision for the graph ABOVE it, not for
+this node.
+
+```
+Extract Face Embedding --embedding--> Store Face
+```"#,
+            NodeKind::StringSwitch => r#"Sends control down whichever named arm matches a piece of text.
+
+The arms are yours, added in the inspector.
+
+```
+Unpack Tracked Object --zone--> Text Switch --driveway--> Create Alert
+                                            --street--> Print
+```"#,
+            NodeKind::Text => r#"Shows a piece of text on the canvas, live.
+
+A readout, not a step: it changes what you see, and control passes through.
+
+```
+Recognize Person --person--> Text
+```"#,
+            NodeKind::TextCompare => r#"Compares two pieces of text with the operator chosen in the inspector.
+
+```
+Unpack Tracked Object --class--> Text Compare ("person") --result--> Branch
+```"#,
+            NodeKind::TimeGate => r#"Lets control through only during the hours you set.
+
+```
+Watch for Motion --moved--> Time Gate --open--> Create Alert
+```"#,
+            NodeKind::Title => r#"A heading on the canvas. For arranging a graph so somebody else can read it.
+
+```
+Title ("Front door")
+```"#,
+            NodeKind::TuyaControl => r#"Turns a smart-home device on or off, or sets its value.
+
+The device is chosen in the inspector.
+
+```
+Detect People --> ... --> Branch --true--> Control Tuya Device (on)
+```"#,
+            NodeKind::TuyaReadStatus => r#"Reads a smart-home device's current state.
+
+`on` is the yes/no for a switch; `value` and `raw` are for everything else.
+
+```
+Read Tuya Status --on--> Not --result--> Branch --true--> Control Tuya Device
+```"#,
+            NodeKind::Wait => r#"Pauses the graph for a number of seconds, then carries on.
+
+It holds the run, so a long wait is a long run.
+
+```
+Start Recording --> Wait (30) --> Stop Recording
+```"#,
+            NodeKind::NumGte => r#"Is `a` greater than or equal to `b`?
+
+```
+Detect People --count--> Greater Than or Equal (2) --result--> Branch --true--> Create Alert
+```"#,
+            // Not in the palette: a wire organiser the engine collapses before execution. Nobody
+            // adds one deliberately, so there is nothing to tell them.
+            NodeKind::Reroute => "",
+        }
+    }
+
     /// The module this node belongs to — used to group the editor's node palette.
     pub fn category(self) -> &'static str {
         match self {

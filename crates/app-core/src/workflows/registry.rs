@@ -106,9 +106,9 @@ fn spec_for(k: NodeKind) -> NodeSpec<SentinelHost> {
     };
 
     let base = if purity.has_exec() {
-        NodeSpec::effectful(k.slug(), k.label(), k.category())
+        NodeSpec::effectful(k.slug(), k.label(), k.category()).about(k.about())
     } else {
-        NodeSpec::pure(k.slug(), k.label(), k.category())
+        NodeSpec::pure(k.slug(), k.label(), k.category()).about(k.about())
     };
 
     let declared = base

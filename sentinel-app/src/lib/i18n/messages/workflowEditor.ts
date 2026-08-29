@@ -98,6 +98,7 @@ export const workflowEditor = {
     incompatibleWire: "These ports cannot be connected.",
     duplicateNodeIds: "Two nodes shared an id — the later one was moved. Save to keep the repair.",
     graphLoadFailed: "That workflow could not be loaded.",
+    whatIsThisNode: "What is this node for?",
     alreadyWired: "Those pins are already wired.",
     untitled: "Untitled",
     // ---- run-button tooltips ----
@@ -301,6 +302,7 @@ export const workflowEditor = {
     incompatibleWire: "Estas portas não podem ser ligadas.",
     duplicateNodeIds: "Dois nós partilhavam um id — o segundo foi movido. Grave para manter a correção.",
     graphLoadFailed: "Não foi possível carregar esse fluxo.",
+    whatIsThisNode: "Para que serve este nó?",
     alreadyWired: "Esses pinos já estão conectados.",
     untitled: "Sem título",
     // ---- run-button tooltips ----

@@ -105,4 +105,31 @@ mod tests {
             );
         }
     }
+
+    /// Every kind in the palette says what it is for, with an example.
+    ///
+    /// `label` and `category` name a thing; they do not say when to reach for it. The description
+    /// is what a person reads in the palette and what a builder reads before choosing — the same
+    /// text, because it is the same question. And the example is not decoration: what a reader
+    /// wants to know is what feeds this node and what it feeds.
+    #[test]
+    fn every_kind_says_what_it_is_for() {
+        let silent: Vec<&str> = NodeKind::ALL
+            .iter()
+            .filter(|k| k.about().trim().is_empty())
+            .map(|k| k.slug())
+            .collect();
+        assert!(silent.is_empty(), "these kinds describe themselves to nobody: {silent:?}");
+
+        let exampleless: Vec<&str> = NodeKind::ALL
+            .iter()
+            .filter(|k| !k.about().contains("```"))
+            .map(|k| k.slug())
+            .collect();
+        assert!(
+            exampleless.is_empty(),
+            "these kinds have no example chain: {exampleless:?}\n\
+             Show what feeds it and what it feeds, in a ``` block."
+        );
+    }
 }
