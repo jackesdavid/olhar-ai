@@ -20,6 +20,30 @@ const ANSWER_MAX_TOKENS: u32 = 640; // a short free-text answer (Telegram reply 
 /// the long edge here to keep the base64 payload small without losing detail.
 const MAX_EDGE: u32 = 1024;
 
+/// Turn a ureq failure into a message that carries the API's own explanation.
+///
+/// `ureq::Error`'s `Display` renders a non-2xx as bare "status code 400" and drops the body —
+/// where Anthropic puts the only text saying WHICH field was rejected. Status also separates the
+/// causes that get confused: 400 is a malformed request or an exhausted credit balance, 401 is a
+/// bad key, 404 an unknown model, 429 a rate limit.
+pub(crate) fn api_err(label: &str, err: ureq::Error) -> String {
+    match err {
+        ureq::Error::Status(code, resp) => {
+            let body = resp.into_string().unwrap_or_default();
+            let detail = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| body.trim().chars().take(400).collect());
+            format!("{label} failed: HTTP {code} — {detail}")
+        }
+        ureq::Error::Transport(t) => format!("{label} failed: {t}"),
+    }
+}
+
 /// Describe the contents of a camera snapshot (any image format the `image`
 /// crate can decode). Returns the description text, or an error string suitable
 /// for showing the operator (e.g. when no API key is configured).
@@ -69,7 +93,7 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("Vision request failed: {e}"))?;
+        .map_err(|e| api_err("Vision request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -130,7 +154,7 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Answer request failed: {e}"))?;
+        .map_err(|e| api_err("AI Answer request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -188,7 +212,7 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Switch request failed: {e}"))?;
+        .map_err(|e| api_err("AI Switch request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -240,7 +264,7 @@ pub fn extract_field(text: &str, field: &str) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Extract request failed: {e}"))?;
+        .map_err(|e| api_err("AI Extract request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -298,7 +322,7 @@ pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> 
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI If request failed: {e}"))?;
+        .map_err(|e| api_err("AI Branch request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()

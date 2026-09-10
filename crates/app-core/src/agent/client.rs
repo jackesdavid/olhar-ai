@@ -70,6 +70,7 @@ pub fn ask(
             .set("anthropic-version", ANTHROPIC_VERSION)
             .set("content-type", "application/json")
             .send_string(&body.to_string())
+            .map_err(|e| log::warn!("{}", super::vision::api_err("Chat agent request", e)))
             .ok()?;
         let parsed: Value = serde_json::from_str(&resp.into_string().ok()?).ok()?;
         let content = parsed.get("content")?.clone();
