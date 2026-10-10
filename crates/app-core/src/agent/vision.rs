@@ -2,23 +2,42 @@
 //! feeds a camera snapshot through here to get a short, factual account of what's
 //! visible. Blocking on purpose — callers run it on a background task. Copied
 //! verbatim from the ratatui `src/agent/vision.rs`.
-use std::io::Cursor;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use image::ImageFormat;
 use serde_json::{json, Value};
 
 use super::domain::{text_of, AgentConfig};
+use super::imageprep::jpeg_b64;
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u32 = 320; // a few sentences of description
 const YES_NO_MAX_TOKENS: u32 = 8; // "YES" or "NO" only
 const ANSWER_MAX_TOKENS: u32 = 640; // a short free-text answer (Telegram reply length)
-/// Cameras can be 1080p+; Claude downsizes anything past ~1568px anyway, so cap
-/// the long edge here to keep the base64 payload small without losing detail.
-const MAX_EDGE: u32 = 1024;
+
+/// Turn a ureq failure into a message that carries the API's own explanation.
+///
+/// `ureq::Error`'s `Display` renders a non-2xx as bare "status code 400" and drops the body —
+/// where Anthropic puts the only text saying WHICH field was rejected. Status also separates the
+/// causes that get confused: 400 is a malformed request or an exhausted credit balance, 401 is a
+/// bad key, 404 an unknown model, 429 a rate limit.
+pub(crate) fn api_err(label: &str, err: ureq::Error) -> String {
+    match err {
+        ureq::Error::Status(code, resp) => {
+            let body = resp.into_string().unwrap_or_default();
+            let detail = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| body.trim().chars().take(400).collect());
+            format!("{label} failed: HTTP {code} — {detail}")
+        }
+        ureq::Error::Transport(t) => format!("{label} failed: {t}"),
+    }
+}
 
 /// Describe the contents of a camera snapshot (any image format the `image`
 /// crate can decode). Returns the description text, or an error string suitable
@@ -27,20 +46,7 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
     let cfg = AgentConfig::from_env()
         .ok_or("Image description needs an ANTHROPIC_API_KEY — none configured.")?;
 
-    // Decode and re-encode to a bounded JPEG so the media type is predictable
-    // (the snapshot may arrive as JPEG over HTTP or a frame from the RTSP
-    // fallback) and the payload stays modest.
-    let img =
-        image::load_from_memory(raw).map_err(|e| format!("Could not decode snapshot: {e}"))?;
-    let img = if img.width().max(img.height()) > MAX_EDGE {
-        img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
-    } else {
-        img
-    };
-    let mut jpeg = Vec::new();
-    img.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
-        .map_err(|e| format!("Could not encode snapshot: {e}"))?;
-    let data = B64.encode(&jpeg);
+    let data = jpeg_b64(raw, "Vision")?;
 
     let prompt = format!(
         "This is a still frame from a security camera named \"{camera_name}\". Describe what is \
@@ -69,7 +75,7 @@ pub fn describe_image(raw: &[u8], camera_name: &str) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("Vision request failed: {e}"))?;
+        .map_err(|e| api_err("Vision request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -95,17 +101,7 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
 
     let mut content: Vec<Value> = Vec::new();
     if let Some(raw) = image {
-        let img = image::load_from_memory(raw)
-            .map_err(|e| format!("AI Answer: could not decode image: {e}"))?;
-        let img = if img.width().max(img.height()) > MAX_EDGE {
-            img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
-        } else {
-            img
-        };
-        let mut jpeg = Vec::new();
-        img.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
-            .map_err(|e| format!("AI Answer: could not encode image: {e}"))?;
-        let data = B64.encode(&jpeg);
+        let data = jpeg_b64(raw, "AI Answer")?;
         content.push(json!({
             "type": "image",
             "source": { "type": "base64", "media_type": "image/jpeg", "data": data }
@@ -130,7 +126,7 @@ pub fn ask_text(prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Answer request failed: {e}"))?;
+        .map_err(|e| api_err("AI Answer request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -188,7 +184,7 @@ pub fn classify_intent(text: &str, arms: &[String]) -> Result<Option<String>, St
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Switch request failed: {e}"))?;
+        .map_err(|e| api_err("AI Switch request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -240,7 +236,7 @@ pub fn extract_field(text: &str, field: &str) -> Result<String, String> {
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI Extract request failed: {e}"))?;
+        .map_err(|e| api_err("AI Extract request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()
@@ -264,17 +260,7 @@ pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> 
 
     let mut content: Vec<Value> = Vec::new();
     if let Some(raw) = image {
-        let img = image::load_from_memory(raw)
-            .map_err(|e| format!("AI If: could not decode image: {e}"))?;
-        let img = if img.width().max(img.height()) > MAX_EDGE {
-            img.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
-        } else {
-            img
-        };
-        let mut jpeg = Vec::new();
-        img.write_to(&mut Cursor::new(&mut jpeg), ImageFormat::Jpeg)
-            .map_err(|e| format!("AI If: could not encode image: {e}"))?;
-        let data = B64.encode(&jpeg);
+        let data = jpeg_b64(raw, "AI If")?;
         content.push(json!({
             "type": "image",
             "source": { "type": "base64", "media_type": "image/jpeg", "data": data }
@@ -298,7 +284,7 @@ pub fn ask_yes_no(question: &str, image: Option<&[u8]>) -> Result<bool, String> 
         .set("anthropic-version", ANTHROPIC_VERSION)
         .set("content-type", "application/json")
         .send_string(&body.to_string())
-        .map_err(|e| format!("AI If request failed: {e}"))?;
+        .map_err(|e| api_err("AI Branch request", e))?;
     let parsed: Value = resp
         .into_string()
         .ok()

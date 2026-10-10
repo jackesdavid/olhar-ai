@@ -259,20 +259,44 @@ impl Vision for LocalVision {
     ) -> Result<Vec<PersonDetection>, String> {
         crate::agent::detector::detect_objects_detailed(jpeg, class_id)
     }
+    // The five LLM-backed operations go to the local model when LOCAL_LLM_URL is set, and to the
+    // Anthropic API otherwise. Read per call, so switching providers is an env change plus a
+    // restart. Deliberately not a failover: if the local box is off, the node fails and the run
+    // says so — falling back would spend on the hosted API without anyone asking.
     fn describe(&self, jpeg: &[u8], label: &str) -> Result<String, String> {
-        crate::agent::vision::describe_image(jpeg, label)
+        if crate::agent::llm_local::configured() {
+            crate::agent::llm_local::describe_image(jpeg, label)
+        } else {
+            crate::agent::vision::describe_image(jpeg, label)
+        }
     }
     fn ask_yes_no(&self, question: &str, image: Option<&[u8]>) -> Result<bool, String> {
-        crate::agent::vision::ask_yes_no(question, image)
+        if crate::agent::llm_local::configured() {
+            crate::agent::llm_local::ask_yes_no(question, image)
+        } else {
+            crate::agent::vision::ask_yes_no(question, image)
+        }
     }
     fn ask_text(&self, prompt: &str, image: Option<&[u8]>) -> Result<String, String> {
-        crate::agent::vision::ask_text(prompt, image)
+        if crate::agent::llm_local::configured() {
+            crate::agent::llm_local::ask_text(prompt, image)
+        } else {
+            crate::agent::vision::ask_text(prompt, image)
+        }
     }
     fn classify(&self, text: &str, arms: &[String]) -> Result<Option<String>, String> {
-        crate::agent::vision::classify_intent(text, arms)
+        if crate::agent::llm_local::configured() {
+            crate::agent::llm_local::classify_intent(text, arms)
+        } else {
+            crate::agent::vision::classify_intent(text, arms)
+        }
     }
     fn extract(&self, text: &str, field: &str) -> Result<String, String> {
-        crate::agent::vision::extract_field(text, field)
+        if crate::agent::llm_local::configured() {
+            crate::agent::llm_local::extract_field(text, field)
+        } else {
+            crate::agent::vision::extract_field(text, field)
+        }
     }
 }
 
